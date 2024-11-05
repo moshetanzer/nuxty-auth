@@ -53,7 +53,6 @@ if (!SESSION_TABLE_NAME) {
   process.exit(1)
 }
 
-const userId = () => crypto.randomUUID()
 function escapeTableName(val: string): string {
   if (val.includes('.')) return val
   return `"${val}"`
@@ -110,15 +109,98 @@ async function checkIfLocked(email: string): Promise<boolean> {
   }
 }
 
-async function incrementFailedAttempts(email: string) {
+async function incrementFailedAttempts(email: string): Promise<void> {
   try {
     await authDB.query(`UPDATE ${AUTH_TABLE_NAME} SET failed_attempts = failed_attempts + 1 WHERE email = $1`, [email])
   } catch (error) {
     await auditLogger(email, 'incrementFailedAttempts', String((error as Error).message), 'unknown', 'unknown', 'error')
   }
 }
+async function resetFailedAttempts(email: string): Promise<void> {
+  try {
+    await authDB.query(`UPDATE ${AUTH_TABLE_NAME} SET failed_attempts = 0 WHERE email = $1`, [email])
+  } catch (error) {
+    await auditLogger(email, 'resetFailedAttempts', String((error as Error).message), 'unknown', 'unknown', 'error')
+  }
+}
+
+  /**
+   * Authenticates a user using their email and password.
+   * @param email - The email address of the user to authenticate.
+   * @param password - The password of the user to authenticate.
+   * @returns The user data if the authentication is successful, otherwise null.
+   * @throws {Error} If the user is locked.
+   * @throws {Error} If the email or password is invalid.
+   */
+export async function authenticateUser(email: string, password: string): Promise<User | null> {
+  try {
+    const result = await authDB.query(`SELECT * FROM ${AUTH_TABLE_NAME} WHERE email = $1`, [email])
+
+    if (result.rows.length === 0) {
+      await verifyPassword(email, password, '$argon2id$v=19$m=16,t=2,p=1$d050OUJMT1RzckoxbGdxYQ$+CQAgx/TccW9Ul/85vo7tg')
+      return null
+    }
+
+    const user = result.rows[0]
+
+    const locked = await checkIfLocked(user.email)
+    if (locked) {
+      throw createError({
+        statusCode: 401,
+        statusMessage: 'Account locked'
+      })
+    }
+
+    const isValid = await verifyPassword(user.email, password, user.password)
+    if (!isValid) {
+      await incrementFailedAttempts(user.email)
+      throw createError({
+        statusCode: 401,
+        statusMessage: 'Invalid email or password'
+      })
+    }
+    await resetFailedAttempts(user.email)
+    return user
+  } catch (error) {
+    await auditLogger(email, 'authenticateUser', String((error as Error).message), 'unknown', 'unknown', 'error')
+    return null
+  }
+}
+
+  /**
+   * Creates a new user.
+   *
+   * @param fname - The first name of the new user.
+   * @param lname - The last name of the new user.
+   * @param email - The email address of the new user.
+   * @param password - The password of the new user.
+   * @param role - The role of the new user (e.g. 'user', 'admin').
+   *
+   * @returns The id of the created user, or null if there was an error.
+   */
+export async function createUser(fname: string, lname: string, email: string, password: string, role: string): Promise<string | null> {
+  try {
+    const userId = crypto.randomUUID()
+    const hashedPassword = await hashPassword(password)
+
+    const result = await authDB.query(`
+      INSERT INTO ${AUTH_TABLE_NAME} (id, fname, lname, email, password, role, failed_attempts)
+      VALUES ($1, $2, $3, $4, $5, $6, 0)
+      RETURNING id
+    `, [userId, fname, lname, email, hashedPassword, role])
+    return result.rows[0].id
+  } catch (error) {
+    await auditLogger(email, 'createUser', String((error as Error).message), 'unknown', 'unknown', 'error')
+    return null
+  }
+}
+
 async function deleteSession(sessionId: string): Promise<void> {
-  await authDB.query(`DELETE FROM ${SESSION_TABLE_NAME} WHERE id = $1`, [sessionId])
+  try {
+    await authDB.query(`DELETE FROM ${SESSION_TABLE_NAME} WHERE id = $1`, [sessionId])
+  } catch (error) {
+    await auditLogger('unknown', 'deleteSession', String((error as Error).message), 'unknown', 'unknown', 'error')
+  }
 }
 export async function auditLogger(email: string, action: string, message: string, ip: string, userAgent: string, status: string) {
   try {
