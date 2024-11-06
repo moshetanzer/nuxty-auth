@@ -1,7 +1,7 @@
 import crypto from 'crypto'
 import pg from 'pg'
 import argon2 from 'argon2'
-
+import type { H3Event } from 'h3'
 export interface User {
   id: string
   email: string
@@ -132,7 +132,8 @@ async function resetFailedAttempts(email: string): Promise<void> {
    * @throws {Error} If the user is locked.
    * @throws {Error} If the email or password is invalid.
    */
-export async function authenticateUser(email: string, password: string): Promise<User | null> {
+export async function authenticateUser(event: H3Event): Promise<User | null> {
+  const { email, password } = await readBody(event)
   try {
     const result = await authDB.query(`SELECT * FROM ${AUTH_TABLE_NAME} WHERE email = $1`, [email])
 
@@ -178,7 +179,8 @@ export async function authenticateUser(email: string, password: string): Promise
    *
    * @returns The id of the created user, or null if there was an error.
    */
-export async function createUser(fname: string, lname: string, email: string, password: string, role: string): Promise<string | null> {
+export async function createUser(event: H3Event): Promise<string | null> {
+  const { fname, lname, email, password, role } = await readBody(event)
   try {
     const userId = crypto.randomUUID()
     const hashedPassword = await hashPassword(password)
@@ -207,5 +209,36 @@ export async function auditLogger(email: string, action: string, message: string
     await authDB.query(`INSERT INTO audit_logs(email, action, message, ip, user_agent, status) VALUES($1, $2, $3, $4, $5, $6)`, [email, action, message, ip, userAgent, status])
   } catch (error) {
     console.error(error)
+  }
+}
+export function verifyRequestOrigin(origin: string, allowedDomains: string[]): boolean {
+  if (!origin || allowedDomains.length === 0) {
+    auditLogger('origin: ' + origin, 'verifyRequestOrigin', 'Invalid origin or allowedDomains', 'unknown', 'unknown', 'error')
+    return false
+  }
+  const originHost = safeURL(origin)?.host ?? null
+  if (!originHost) {
+    auditLogger('origin: ' + origin, 'verifyRequestOrigin', 'Invalid origin host', 'unknown', 'unknown', 'error')
+    return false
+  }
+  for (const domain of allowedDomains) {
+    let host: string | null
+    if (domain.startsWith('http://') || domain.startsWith('https://')) {
+      host = safeURL(domain)?.host ?? null
+    } else {
+      host = safeURL('https://' + domain)?.host ?? null
+    }
+    if (originHost === host) return true
+  }
+  auditLogger('origin: ' + origin, 'verifyRequestOrigin', 'Origin not allowed', 'unknown', 'unknown', 'error')
+  return false
+}
+
+function safeURL(url: URL | string): URL | null {
+  try {
+    return new URL(url)
+  } catch {
+    auditLogger('url: ' + url, 'safeURL', 'Invalid URL', 'unknown', 'unknown', 'error')
+    return null
   }
 }
