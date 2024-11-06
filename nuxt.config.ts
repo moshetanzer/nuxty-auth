@@ -6,6 +6,8 @@ export default defineNuxtConfig({
     authDb: '',
     authUserTableName: '',
     authSessionTableName: '',
+    sessionRefreshInterval: '',
+    sessionTotaDuration: '',
     emailHost: '',
     emailPort: '',
     emailUser: '',

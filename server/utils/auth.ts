@@ -2,24 +2,7 @@ import crypto from 'crypto'
 import pg from 'pg'
 import argon2 from 'argon2'
 import type { H3Event } from 'h3'
-export interface User {
-  id: string
-  email: string
-  fname: string
-  lname: string
-  failed_attempts: number
-  email_verified: boolean
-  reset_token: string
-  reset_token_expires_at: Date
-  email_mfa: boolean
-  role: string[]
-}
-export interface Session {
-  id: string
-  user_id: string
-  expires_at: Date
-  two_factor_verified: boolean
-}
+import type { User, Session } from '#shared/types'
 
 const { Pool } = pg
 const config = useRuntimeConfig()
@@ -32,6 +15,9 @@ const authDB = new Pool({
 const AUTH_TABLE_NAME = escapeTableName(config.authUserTableName)
 const SESSION_TABLE_NAME = escapeTableName(config.authSessionTableName)
 const MAX_FAILED_ATTEMPTS = config.maxFailedAttempts || 10 as number
+const SESSION_TOTAL_DURATION = 43200 // mins (30 days)
+const SESSION_REFRESH_INTERVAL = 720 // mins (12 hours)
+const SESSION_EXTENSION_DURATION = 10080 // mins (7 days)
 
 const ARGON2_CONFIG = {
   type: argon2.argon2id,
@@ -61,6 +47,7 @@ async function hashPassword(password: string): Promise<string | false> {
   try {
     return await argon2.hash(password, ARGON2_CONFIG)
   } catch (error) {
+    await auditLogger('unknown', 'hashPassword', String((error as Error).message), 'unknown', 'unknown', 'error')
     return false
   }
 }
@@ -121,7 +108,7 @@ async function resetFailedAttempts(email: string): Promise<void> {
   }
 }
 
-  /**
+/**
    * Authenticates a user using their email and password.
    * @param email - The email address of the user to authenticate.
    * @param password - The password of the user to authenticate.
@@ -165,7 +152,7 @@ export async function authenticateUser(event: H3Event): Promise<User | null> {
   }
 }
 
-  /**
+/**
    * Creates a new user.
    *
    * @param fname - The first name of the new user.
@@ -194,22 +181,119 @@ export async function createUser(event: H3Event): Promise<string | null> {
   }
 }
 
-async function createSession(event: H3Event, userId: string): Promise<Session | null> {
+export async function createSession(event: H3Event, userId: string): Promise<void> {
   const sessionId = crypto.randomUUID()
-  const {email} = await readBody(event)
+  const { email } = await readBody(event)
+
   try {
-    const result = await authDB.query(`INSERT INTO ${SESSION_TABLE_NAME} (id, user_id, expires_at, two_factor_verified) VALUES ($1, (SELECT id FROM ${AUTH_TABLE_NAME} WHERE email = $2), NOW() + INTERVAL '1 day', false)`, [sessionId, email])
-    return result.rows[0]
+    await authDB.query(`
+      INSERT INTO ${SESSION_TABLE_NAME} (
+        id,
+        user_id,
+        expires_at,
+        two_factor_verified
+      )
+      VALUES (
+        $1,
+        $2,
+        NOW() + (INTERVAL '1 minute' * $3),
+        false
+      )
+      RETURNING *
+    `,
+    [sessionId, userId, SESSION_TOTAL_DURATION]
+    )
+    if (process.env.NODE_ENV === 'development') {
+      setCookie(event, 'sessionId', sessionId, {
+        path: '/',
+        maxAge: SESSION_TOTAL_DURATION * 60,
+        httpOnly: true,
+        sameSite: 'lax',
+        secure: true
+      })
+    } else {
+      setCookie(event, '__Host-sid', sessionId, {
+        path: '/',
+        maxAge: SESSION_TOTAL_DURATION * 60,
+        httpOnly: true,
+        sameSite: 'lax',
+        secure: true
+      })
+    }
   } catch (error) {
     await auditLogger(email, 'createSession', String((error as Error).message), 'unknown', 'unknown', 'error')
-    return null
   }
 }
-async function deleteSession(sessionId: string): Promise<void> {
+
+export async function isValidSession(sessionId: string): Promise<boolean> {
+  try {
+    const result = await authDB.query(`
+      WITH session_check AS (
+        SELECT EXISTS (
+          SELECT 1 
+          FROM ${SESSION_TABLE_NAME}
+          WHERE id = $1
+          AND expires_at > NOW()
+          AND created_at + (INTERVAL '1 minute' * $2) > NOW()
+          ) as is_valid
+          )
+          UPDATE ${SESSION_TABLE_NAME}
+          SET 
+          expires_at = CASE 
+          WHEN created_at + (INTERVAL '1 minute' * $2) > NOW() + (INTERVAL '1 minute' * $3)
+          AND last_activity_at < NOW() - (INTERVAL '1 minute' * $4)
+          THEN NOW() + (INTERVAL '1 minute' * $3)
+          ELSE expires_at
+          END,
+          last_activity_at = CASE 
+          WHEN last_activity_at < NOW() - (INTERVAL '1 minute' * $4)
+          THEN NOW()
+          ELSE last_activity_at
+          END,
+          updated_at = CASE 
+          WHEN last_activity_at < NOW() - (INTERVAL '1 minute' * $4)
+          THEN NOW()
+          ELSE updated_at
+          END
+          WHERE id = $1
+          AND expires_at > NOW()
+          AND created_at + (INTERVAL '1 minute' * $2) > NOW()
+          RETURNING (SELECT is_valid FROM session_check)`,
+    [
+      sessionId,
+      SESSION_TOTAL_DURATION, // 720 minutes (12 hours)
+      SESSION_EXTENSION_DURATION, // 60 minutes (1 hour)
+      SESSION_REFRESH_INTERVAL // 30 minutes
+    ]
+    )
+    return result.rows[0]?.is_valid || false
+  } catch (error) {
+    await auditLogger('unknown', 'isValidSession', String((error as Error).message), sessionId, 'unknown', 'error')
+    return false
+  }
+}
+export async function deleteSession(event: H3Event, sessionId: string): Promise<void> {
   try {
     await authDB.query(`DELETE FROM ${SESSION_TABLE_NAME} WHERE id = $1`, [sessionId])
+    if (proccess.env.NODE_ENV === 'development') {
+      deleteCookie(event, 'sessionId')
+    } else {
+      deleteCookie(event, '__Host-sid')
+    }
   } catch (error) {
     await auditLogger('unknown', 'deleteSession', String((error as Error).message), 'unknown', 'unknown', 'error')
+  }
+}
+export async function cleanupExpiredSessions(): Promise<void> {
+  try {
+    await authDB.query(`
+          DELETE FROM ${SESSION_TABLE_NAME}
+          WHERE expires_at <= NOW()
+          OR created_at + (INTERVAL '1 minute' * $1) <= NOW()`,
+    [SESSION_TOTAL_DURATION + SESSION_EXTENSION_DURATION]
+    )
+  } catch (error) {
+    await auditLogger('system', 'cleanupExpiredSessions', String((error as Error).message), 'unknown', 'unknown', 'error')
   }
 }
 export async function auditLogger(email: string, action: string, message: string, ip: string, userAgent: string, status: string) {
