@@ -4,13 +4,12 @@ export default defineNuxtConfig({
   devtools: { enabled: false },
   runtimeConfig: {
     authDb: '',
+    authUserTableName: '',
+    authSessionTableName: '',
     emailHost: '',
     emailPort: '',
     emailUser: '',
     emailPassword: '',
-    sessionTotalDuration: '',
-    sessionSlidingWindow: '',
-    sessionRefreshInterval: '',
     baseUrl: 'http://localhost:3000'
   },
   routeRules: {
