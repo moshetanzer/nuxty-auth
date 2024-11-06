@@ -57,6 +57,34 @@ function escapeTableName(val: string): string {
   if (val.includes('.')) return val
   return `"${val}"`
 }
+function base32Encode(buffer: Uint8Array): string {
+  const ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  let bits = 0;
+  let value = 0;
+  let output = '';
+
+  for (let i = 0; i < buffer.length; i++) {
+      value = (value << 8) | (buffer[i] & 0xff);
+      bits += 8;
+      
+      while (bits >= 5) {
+          const index = (value >>> (bits - 5)) & 31;
+          output += ALPHABET[index];
+          bits -= 5;
+      }
+  }
+
+  if (bits > 0) {
+      const index = (value << (5 - bits)) & 31;
+      output += ALPHABET[index];
+  }
+
+  return output.toLowerCase()
+}
+export function generateIdFromEntropySize(size: number): string {
+	const buffer = crypto.getRandomValues(new Uint8Array(size));
+	return base32Encode(buffer);
+}
 
 async function hashPassword(password: string): Promise<string | false> {
   try {
@@ -65,7 +93,6 @@ async function hashPassword(password: string): Promise<string | false> {
     return false
   }
 }
-
 async function verifyPassword(email: string, password: string, hash: string): Promise<boolean> {
   try {
     if (await argon2.verify(hash, password)) {
@@ -108,7 +135,6 @@ async function checkIfLocked(email: string): Promise<boolean> {
     return false
   }
 }
-
 async function incrementFailedAttempts(email: string): Promise<void> {
   try {
     await authDB.query(`UPDATE ${AUTH_TABLE_NAME} SET failed_attempts = failed_attempts + 1 WHERE email = $1`, [email])
@@ -197,6 +223,16 @@ export async function createUser(event: H3Event): Promise<string | null> {
   }
 }
 
+async function createSession(event: H3Event, userId: string): Promise<Session | null> {
+  const sessionId = crypto.randomUUID()
+  try {
+    const result = await authDB.query(`INSERT INTO ${SESSION_TABLE_NAME} (id, user_id, expires_at, two_factor_verified) VALUES ($1, (SELECT id FROM ${AUTH_TABLE_NAME} WHERE email = $2), NOW() + INTERVAL '1 day', false)`, [sessionId, email])
+    return result.rows[0]
+  } catch (error) {
+    await auditLogger(email, 'createSession', String((error as Error).message), 'unknown', 'unknown', 'error')
+    return null
+  }
+}
 async function deleteSession(sessionId: string): Promise<void> {
   try {
     await authDB.query(`DELETE FROM ${SESSION_TABLE_NAME} WHERE id = $1`, [sessionId])
