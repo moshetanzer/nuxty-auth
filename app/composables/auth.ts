@@ -5,7 +5,7 @@ export const useUser = () => {
   return user
 }
 
-export const useLogOut = async () => {
+export const useSignOut = async () => {
   try {
     await $fetch('/api/auth/signout', { method: 'POST' })
     const user = useUser()

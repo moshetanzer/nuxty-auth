@@ -3,11 +3,11 @@ export default defineNuxtConfig({
   ssr: true,
   devtools: { enabled: false },
   runtimeConfig: {
-    authDb: '',
+    authConnectionString: '',
     authUserTableName: '',
     authSessionTableName: '',
     sessionRefreshInterval: '',
-    sessionTotaDuration: '',
+    sessionTotalDuration: '',
     emailHost: '',
     emailPort: '',
     emailUser: '',
