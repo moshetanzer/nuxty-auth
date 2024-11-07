@@ -2,7 +2,7 @@ import crypto from 'crypto'
 import pg from 'pg'
 import argon2 from 'argon2'
 import type { H3Event } from 'h3'
-import type { User } from '#shared/types'
+import type { User, Session } from '#shared/types'
 
 const { Pool } = pg
 const config = useRuntimeConfig()
@@ -14,6 +14,10 @@ const authDB = new Pool({
 
 const AUTH_TABLE_NAME = escapeTableName(config.authUserTableName)
 const SESSION_TABLE_NAME = escapeTableName(config.authSessionTableName)
+const MFA_TABLE_NAME = escapeTableName(config.authMfaTableName)
+// const EMAIL_VERIFICATION_TABLE_NAME = escapeTableName(config.authEmailVerificationTableName)
+const EMAIL_OTP_EXPIRY = 15 // mins
+
 const MAX_FAILED_ATTEMPTS = config.maxFailedAttempts || 10 as number
 
 const RATE_LIMIT = 100
@@ -168,7 +172,8 @@ export async function authenticateUser(event: H3Event): Promise<User | null> {
    * @returns The id of the created user, or null if there was an error.
    */
 export async function createUser(event: H3Event): Promise<string | null> {
-  const { fname, lname, email, password, role } = await readBody(event)
+  const { fname, lname, email, password } = await readBody(event)
+  const role = useRuntimeConfig(event).defaultUserRole || 'user'
   try {
     const userId = crypto.randomUUID()
     const hashedPassword = await hashPassword(password)
@@ -190,12 +195,12 @@ export async function createSession(event: H3Event, userId: string): Promise<voi
 
   const { email } = await readBody(event)
   try {
-    await authDB.query(`
+    await authDB.query<Session>(`
       INSERT INTO ${SESSION_TABLE_NAME} (
         id,
         user_id,
         expires_at,
-        two_factor_verified
+        mfa_verified
       )
       VALUES (
         $1,
@@ -235,7 +240,7 @@ export async function handleSession(event: H3Event): Promise<boolean> {
       u.lname, 
       u.email, 
       u.email_verified, 
-      u.email_mfa,
+      u.mfa,
       (s.created_at + INTERVAL '${Number(SESSION_TOTAL_DURATION) / 1000} seconds') AS absolute_expiration
     FROM sessions s
     JOIN users u ON s.user_id = u.id
@@ -272,22 +277,21 @@ export async function handleSession(event: H3Event): Promise<boolean> {
       }
     }
 
-    const session = {
+    const session: Session = {
       id: sessionRow.id,
       user_id: sessionRow.user_id,
       expires_at: sessionRow.expires_at,
-      absolute_expiration: sessionRow.absolute_expiration,
-      two_factor_verified: sessionRow.two_factor_verified
+      mfa_verified: sessionRow.mfa_verified
     }
 
-    const user = {
+    const user: Partial<User> = {
       role: sessionRow.role,
       fname: sessionRow.fname,
       lname: sessionRow.lname,
       email: sessionRow.email,
       email_verified: sessionRow.email_verified,
       id: sessionRow.user_id,
-      email_mfa: sessionRow.email_mfa
+      mfa: sessionRow.mfa
     }
 
     const sessionData = { session, user }
@@ -612,9 +616,16 @@ export async function roleBasedAuth(event: H3Event) {
     return // No rules defined, allow access
   }
 
-  const userRoles = event.context.user?.role || []
-  console.log(userRoles)
-  if (!hasRequiredRole(userRoles, rules)) {
+  if (!event.context.user?.role) {
+    const ip = getRequestIP(event) as string
+    const userAgent = event.node.req.headers['user-agent'] as string
+    await auditLogger('unknown', 'roleBasedAuth', 'Unauthorized', ip, userAgent, 'error')
+    console.log('Unauthorized: No role')
+    return event.node.res.writeHead(403).end('Unauthorized: No role')
+  }
+
+  const userRole = event.context.user?.role as string
+  if (!hasRequiredRole(userRole, rules)) {
     const ip = getRequestIP(event) as string
     const userAgent = event.node.req.headers['user-agent'] as string
     auditLogger(event.context.user?.email ?? 'unknown', 'roleBasedAuth', 'Unauthorized', ip, userAgent, 'error')
@@ -622,7 +633,7 @@ export async function roleBasedAuth(event: H3Event) {
     return event.node.res.writeHead(403).end('Unauthorized: Insufficient role')
   }
 
-  if (to && !checkAccess(userRoles, to, rules)) {
+  if (to && !checkAccess(userRole, to, rules)) {
     const ip = getRequestIP(event) as string
     const userAgent = event.node.req.headers['user-agent'] as string
     auditLogger(event.context.user?.email ?? 'unknown', 'roleBasedAuth', 'Unauthorized', ip, userAgent, 'error')
@@ -631,15 +642,15 @@ export async function roleBasedAuth(event: H3Event) {
   }
 }
 
-function hasRequiredRole(userRoles: string[], requiredRoles: string[]): boolean {
-  return requiredRoles.some(role => userRoles.includes(role))
+function hasRequiredRole(userRole: string, requiredRoles: string[]): boolean {
+  return requiredRoles.some(role => userRole === role)
 }
 
-function checkAccess(userRoles: string[], to: string, rules: string[]): boolean {
+function checkAccess(userRole: string, to: string, rules: string[]): boolean {
   return rules.some((rule) => {
     const [roleName, routePattern] = rule.split(':')
     const regex = new RegExp(routePattern)
-    return regex.test(to) && userRoles.includes(roleName)
+    return regex.test(to) && userRole === roleName
   })
 }
 export async function emailVerification(event: H3Event) {
@@ -667,6 +678,43 @@ export async function handleCsrf(event: H3Event) {
       }
     }
   }
+}
+
+function generateOTP() {
+  return crypto.randomInt(10000000, 100000000).toString()
+}
+
+export async function saveAndSendOTP(email: string) {
+  const otp = generateOTP()
+  await authDB.query(`INSERT INTO ${MFA_TABLE_NAME} (email, otp, expires_at) VALUES($1, $2, NOW() + INTERVAL '$3 minutes')`, [email, otp, EMAIL_OTP_EXPIRY]).catch(async (error) => {
+    await auditLogger(
+      email,
+      'saveAndSendOTP',
+      String((error as Error).message),
+      'unknown',
+      'unknown',
+      'error'
+    )
+  })
+  await sendEmail(email, 'Your OTP', `Your OTP is: ${otp}`).catch(async (error) => {
+    await auditLogger(
+      email,
+      'saveAndSendOTP',
+      `Email sending failed: ${String((error as Error).message)}`,
+      'unknown',
+      'unknown',
+      'error'
+    )
+  })
+}
+
+export async function verifyOTP(email: string, otp: string) {
+  const result = await authDB.query(`SELECT * FROM ${MFA_TABLE_NAME} WHERE email = $1 AND otp = $2 AND expires_at > NOW()`, [email, otp])
+  if (result.rows.length === 0) {
+    return false
+  }
+  await authDB.query(`DELETE FROM ${MFA_TABLE_NAME} WHERE email = $1`, [email])
+  return true
 }
 
 export async function auditLogger(email: string, action: string, message: string, ip: string, userAgent: string, status: string) {

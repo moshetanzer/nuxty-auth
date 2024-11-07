@@ -7,12 +7,12 @@ export interface User {
   email_verified: boolean
   reset_token: string
   reset_token_expires_at: Date
-  email_mfa: boolean
-  role: string[]
+  mfa: boolean
+  role: string
 }
 export interface Session {
   id: string
   user_id: string
   expires_at: Date
-  two_factor_verified: boolean
+  mfa_verified: boolean
 }

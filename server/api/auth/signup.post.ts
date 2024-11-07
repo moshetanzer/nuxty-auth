@@ -7,12 +7,11 @@ export default defineEventHandler(async (event) => {
       statusMessage: 'Missing firstname, lastname, email or password'
     })
   }
-
   const user = await createUser(event)
   if (!user) {
     return createError({
       statusCode: 400,
-      statusMessage: 'Failed to create user'
+      statusMessage: 'Failed to create user here'
     })
   }
 

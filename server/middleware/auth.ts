@@ -11,13 +11,6 @@ export default defineEventHandler(async (event) => {
   // Session Management
   await handleSession(event)
 
-  // const requiresAuth = getRouteRules(event).nuxtyAuth?.roles || getRouteRules(event).nuxtyAuth?.emailVerification
-  // if (requiresAuth) {
-  //   throw createError({
-  //     statusCode: 401,
-  //     statusMessage: 'Authentication required'
-  //   })
-  // }
   // Role-Based Authorization
   await roleBasedAuth(event)
 
