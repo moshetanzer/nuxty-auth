@@ -741,7 +741,7 @@ export async function verifyOTP(event: H3Event): Promise<boolean> {
     })
   }
 
-  await authDB.query(`SELECT * FROM ${MFA_TABLE_NAME} WHERE user_id = $1 AND secret = $2 AND created_at > NOW() - INTERVAL '$3 minutes'`, [userId, otp, EMAIL_OTP_EXPIRY]).catch(async (error) => {
+  await authDB.query(`SELECT * FROM ${MFA_TABLE_NAME} WHERE user_id = $1 AND secret = $2 AND created_at > NOW() - (INTERVAL '1 minute' * $3)`, [userId, otp, EMAIL_OTP_EXPIRY]).catch(async (error) => {
     await auditLogger(
       email,
       'verifyOTP',
