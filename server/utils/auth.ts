@@ -753,6 +753,18 @@ export async function verifyOTP(event: H3Event): Promise<boolean> {
     return false
   })
 
+  await authDB.query(`UPDATE ${SESSION_TABLE_NAME} SET mfa_verified = true WHERE user_id = $1`, [userId]).catch(async (error) => {
+    await auditLogger(
+      email,
+      'verifyOTP',
+      String((error as Error).message),
+      'unknown',
+      'unknown',
+      'error'
+    )
+    return false
+  })
+
   await authDB.query(`DELETE FROM ${MFA_TABLE_NAME} WHERE user_id = $1`, [userId]).catch(async (error) => {
     await auditLogger(
       email,

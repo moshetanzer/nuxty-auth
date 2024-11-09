@@ -6,6 +6,11 @@ export default defineNuxtRouteMiddleware((to, from) => {
       query: to.fullPath !== '/' ? { redirect: to.fullPath } : {}
     })
   }
+  if (user.value.mfa) {
+    if (!user.value.mfa_verified) {
+      return navigateTo('/multi-factor')
+    }
+  }
   if (to.meta.auth) {
     const requiredRoles = (to.meta.auth as { roles: string[] }).roles || []
     if (!user.value?.role || !requiredRoles.includes(user.value.role)) {

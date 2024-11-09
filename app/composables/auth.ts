@@ -1,7 +1,7 @@
-import type { User } from '#shared/types'
+import type { UserWithSession } from '#shared/types'
 
 export const useUser = () => {
-  const user = useState<User | null>('user', () => null)
+  const user = useState<UserWithSession | null>('user', () => null)
   return user
 }
 
