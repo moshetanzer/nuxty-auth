@@ -1,4 +1,7 @@
 <script setup lang="ts">
+useHead({
+  title: 'Forgot Password'
+})
 const email = ref('')
 const status = ref('')
 async function forgotPassword() {

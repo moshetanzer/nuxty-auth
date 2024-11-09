@@ -21,7 +21,7 @@ const EMAIL_OTP_EXPIRY = 15 // mins
 const MAX_FAILED_ATTEMPTS = config.maxFailedAttempts || 10 as number
 
 const RATE_LIMIT = 100
-const RATE_LIMIT_WINDOW = 60
+const RATE_LIMIT_WINDOW = 60 // seconds
 
 const SESSION_TOTAL_DURATION = 43200 // mins (30 days)
 const SESSION_REFRESH_INTERVAL = 720 // mins (12 hours)
@@ -44,6 +44,10 @@ if (!AUTH_TABLE_NAME) {
 }
 if (!SESSION_TABLE_NAME) {
   console.error('No session table name provided')
+  process.exit(1)
+}
+if (!MFA_TABLE_NAME) {
+  console.error('No MFA table name provided')
   process.exit(1)
 }
 
@@ -88,7 +92,7 @@ async function checkIfLocked(email: string): Promise<boolean> {
       await auditLogger(email, 'checkIfLocked', 'Account not found', 'unknown', 'unknown', 'error')
       return false
     }
-    const isLocked = result.rows[0].failed_attempts >= MAX_FAILED_ATTEMPTS
+    const isLocked = result.rows[0].failed_attempts >= Number(MAX_FAILED_ATTEMPTS)
 
     if (isLocked) {
       await auditLogger(email, 'checkIfLocked', 'Account locked', 'unknown', 'unknown', 'error')
@@ -241,12 +245,12 @@ export async function handleSession(event: H3Event): Promise<boolean> {
       u.email, 
       u.email_verified, 
       u.mfa,
-      (s.created_at + INTERVAL '${Number(SESSION_TOTAL_DURATION) / 1000} seconds') AS absolute_expiration
+      (s.created_at + INTERVAL '${Number(SESSION_TOTAL_DURATION) * 60} seconds') AS absolute_expiration
     FROM sessions s
     JOIN users u ON s.user_id = u.id
     WHERE s.id = $1 
       AND s.expires_at > NOW() 
-      AND (s.created_at + INTERVAL '${Number(SESSION_TOTAL_DURATION) / 1000} seconds') > NOW()
+      AND (s.created_at + INTERVAL '${Number(SESSION_TOTAL_DURATION) * 60} seconds') > NOW()
   `
 
     const result = await authDB.query(query, [sessionId])
@@ -357,7 +361,7 @@ export async function handleRateLimit(event: H3Event): Promise<void> {
 
   function getClientIP(event: H3Event): string {
     return event.node.req.headers['x-forwarded-for'] as string
-      || event.node.req.connection.remoteAddress as string
+      || event.node.req.socket.remoteAddress as string
   }
 
   function setRateLimitHeaders(event: H3Event, current: number, ttl: number): void {
@@ -680,13 +684,29 @@ export async function handleCsrf(event: H3Event) {
   }
 }
 
-function generateOTP() {
-  return crypto.randomInt(10000000, 100000000).toString()
+function generateOTP(): string {
+  const buffer = crypto.randomBytes(4)
+  const num = buffer.readUInt32BE(0) % 1000000
+  return num.toString().padStart(6, '0')
 }
 
-export async function saveAndSendOTP(email: string) {
+export async function saveAndSendOTP(event: H3Event) {
+  const email = event.context.user?.email
+  const userId = event.context.user?.id
+  const ip = getRequestIP(event) || 'unknown'
+  const useragent = event.node.req.headers['user-agent'] as string
+  if (!email || !userId) {
+    await auditLogger('', 'saveAndSendOTP', 'Email or user ID not found', ip, useragent, 'error')
+    throw createError({
+      statusCode: 400,
+      statusMessage: 'Email or user ID not found'
+    })
+  }
   const otp = generateOTP()
-  await authDB.query(`INSERT INTO ${MFA_TABLE_NAME} (email, otp, expires_at) VALUES($1, $2, NOW() + INTERVAL '$3 minutes')`, [email, otp, EMAIL_OTP_EXPIRY]).catch(async (error) => {
+  await authDB.query(
+    `INSERT INTO ${MFA_TABLE_NAME} (user_id, secret) VALUES ($1, $2)`,
+    [userId, otp]
+  ).catch(async (error) => {
     await auditLogger(
       email,
       'saveAndSendOTP',
@@ -708,15 +728,107 @@ export async function saveAndSendOTP(email: string) {
   })
 }
 
-export async function verifyOTP(email: string, otp: string) {
-  const result = await authDB.query(`SELECT * FROM ${MFA_TABLE_NAME} WHERE email = $1 AND otp = $2 AND expires_at > NOW()`, [email, otp])
-  if (result.rows.length === 0) {
-    return false
+export async function verifyOTP(event: H3Event): Promise<boolean> {
+  const { otp } = await readBody(event)
+  const userId = event.context.user?.id
+  const email = event.context.user?.email
+
+  if (!userId || !email) {
+    await auditLogger('', 'verifyOTP', 'User ID or email not found', 'unknown', 'unknown', 'error')
+    throw createError({
+      statusCode: 400,
+      statusMessage: 'User ID or email not found'
+    })
   }
-  await authDB.query(`DELETE FROM ${MFA_TABLE_NAME} WHERE email = $1`, [email])
+
+  await authDB.query(`SELECT * FROM ${MFA_TABLE_NAME} WHERE user_id = $1 AND secret = $2 AND created_at > NOW() - INTERVAL '$3 minutes'`, [userId, otp, EMAIL_OTP_EXPIRY]).catch(async (error) => {
+    await auditLogger(
+      email,
+      'verifyOTP',
+      String((error as Error).message),
+      'unknown',
+      'unknown',
+      'error'
+    )
+    return false
+  })
+
+  await authDB.query(`DELETE FROM ${MFA_TABLE_NAME} WHERE user_id = $1`, [userId]).catch(async (error) => {
+    await auditLogger(
+      email,
+      'verifyOTP',
+      String((error as Error).message),
+      'unknown',
+      'unknown',
+      'error'
+    )
+  })
   return true
 }
 
+export async function activateMFA(event: H3Event): Promise<boolean> {
+  const email = event.context.user?.email
+  const userId = event.context.user?.id
+  if (!userId) {
+    await auditLogger('', 'activateMFA', 'User ID not found', 'unknown', 'unknown', 'error')
+    throw createError({
+      statusCode: 400,
+      statusMessage: 'User ID not found'
+    })
+  }
+  if (!email) {
+    await auditLogger('', 'activateMFA', 'Email not found', 'unknown', 'unknown', 'error')
+    throw createError({
+      statusCode: 400,
+      statusMessage: 'Email not found'
+    })
+  }
+
+  await authDB.query(`UPDATE ${AUTH_TABLE_NAME} SET mfa = true WHERE id = $1`, [userId]).catch(async (error) => {
+    await auditLogger(
+      email,
+      'activateMFA',
+      String((error as Error).message),
+      'unknown',
+      'unknown',
+      'error'
+    )
+    return false
+  })
+  return true
+}
+
+export async function deactivateMFA(event: H3Event): Promise<boolean> {
+  const email = event.context.user?.email
+  const userId = event.context.user?.id
+  if (!userId) {
+    await auditLogger('', 'deactivateMFA', 'User ID not found', 'unknown', 'unknown', 'error')
+    throw createError({
+      statusCode: 400,
+      statusMessage: 'User ID not found'
+    })
+  }
+  if (!email) {
+    await auditLogger('', 'deactivateMFA', 'Email not found', 'unknown', 'unknown', 'error')
+    throw createError({
+      statusCode: 400,
+      statusMessage: 'Email not found'
+    })
+  }
+
+  await authDB.query(`UPDATE ${AUTH_TABLE_NAME} SET mfa = false WHERE id = $1`, [userId]).catch(async (error) => {
+    await auditLogger(
+      email,
+      'deactivateMFA',
+      String((error as Error).message),
+      'unknown',
+      'unknown',
+      'error'
+    )
+    return false
+  })
+  return true
+}
 export async function auditLogger(email: string, action: string, message: string, ip: string, userAgent: string, status: string) {
   try {
     await authDB.query(`INSERT INTO audit_logs(email, action, message, ip, user_agent, status) VALUES($1, $2, $3, $4, $5, $6)`, [email, action, message, ip, userAgent, status])

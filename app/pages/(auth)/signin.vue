@@ -1,4 +1,7 @@
 <script setup lang="ts">
+useHead({
+  title: 'Sign In'
+})
 definePageMeta({
   middleware: ['protected-from-logged-in']
 })

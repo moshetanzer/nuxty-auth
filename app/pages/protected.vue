@@ -1,4 +1,7 @@
 <script setup lang="ts">
+useHead({
+  title: 'Protected Page'
+})
 definePageMeta({
   middleware: ['protected'],
   auth: {
@@ -14,6 +17,7 @@ const user = useUser()
     <NuxtLink to="/">
       Home
     </NuxtLink>
+    <ActivateMfa />
     <button @click="useSignOut()">
       Sign Out
     </button>

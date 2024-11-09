@@ -1,4 +1,7 @@
 <script setup lang="ts">
+useHead({
+  title: 'Reset Password'
+})
 definePageMeta({
   middleware: ['reset-password-verification']
 })

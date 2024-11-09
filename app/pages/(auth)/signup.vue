@@ -1,4 +1,7 @@
 <script lang="ts" setup>
+useHead({
+  title: 'Sign Up'
+})
 const fname = ref('')
 const lname = ref('')
 const email = ref('')

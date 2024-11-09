@@ -11,6 +11,7 @@ export default defineNuxtConfig({
     defaultUserRole: '',
     sessionRefreshInterval: '',
     sessionTotalDuration: '',
+    maxFailedAttempts: '',
     emailHost: '',
     emailPort: '',
     emailUser: '',
