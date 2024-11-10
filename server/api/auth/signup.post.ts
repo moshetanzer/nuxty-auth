@@ -16,6 +16,7 @@ export default defineEventHandler(async (event) => {
   }
 
   return {
-    message: 'Account created. Please login.'
+    success: true,
+    message: 'Successfully signed up'
   }
 })

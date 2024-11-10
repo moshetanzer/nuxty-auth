@@ -2,12 +2,21 @@ export default defineEventHandler(async (event) => {
   try {
     const result = await verifyOTP(event)
     if (result) {
-      return true
+      return {
+        success: true,
+        message: 'Successfully verified OTP'
+      }
     } else {
-      return false
+      throw createError({
+        statusCode: 400,
+        statusMessage: 'Failed to verify OTP'
+      })
     }
   } catch (err) {
     await auditLogger('', 'verifyOTP', String((err as Error).message), 'unknown', 'unknown', 'error')
-    return false
+    throw createError({
+      statusCode: 500,
+      statusMessage: 'An error occurred processing your request'
+    })
   }
 })

@@ -10,6 +10,7 @@ export default defineEventHandler(async (event) => {
   await deleteSession(event)
 
   return {
-    message: 'Logged out'
+    success: true,
+    message: 'Successfully signed out'
   }
 })

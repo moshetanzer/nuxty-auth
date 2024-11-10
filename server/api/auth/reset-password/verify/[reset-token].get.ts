@@ -7,10 +7,10 @@ export default defineEventHandler(async (event) => {
       return { success: false, message: 'Reset token verification failed' }
     }
   } catch (error) {
+    await auditLogger('', 'verifyResetToken', String((error as Error).message), 'unknown', 'unknown', 'error')
     throw createError({
-      message: (error as Error).message || 'An error occurred',
-      data: { error },
-      status: 400
+      statusCode: 500,
+      statusMessage: 'An error occurred processing your request'
     })
   }
 })

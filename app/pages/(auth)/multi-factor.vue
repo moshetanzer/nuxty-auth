@@ -1,10 +1,10 @@
 <template>
   <div>
-    multi-factor
+    Multi-Factor
 
     <form
       method="post"
-      @submit.prevent="useVerifyMfa()"
+      @submit.prevent="handleSubmit"
     >
       <input
         v-model="otp"
@@ -17,37 +17,22 @@
 </template>
 
 <script setup lang="ts">
-async function sendOtp() {
-  try {
-    await $fetch('/api/auth/mfa/email/generate',
-      { method: 'POST' }
-    )
-  } catch (error) {
-    console.error(error)
-  }
-}
-await sendOtp()
+const { sendOtp, verifyOtp } = useAuth()
+onMounted(async () => {
+  await sendOtp()
+})
+const status = ref('')
 const otp = ref('')
-const route = useRoute()
-async function useVerifyMfa() {
+async function handleSubmit() {
   try {
-    const result = await $fetch('/api/auth/mfa/email', {
-      method: 'POST',
-      body: JSON.stringify({
-        otp: otp.value
-      })
-    })
-    if (result === true) {
-      if (route.query.redirect) {
-        await navigateTo(route.query.redirect as string)
-      } else {
-        await navigateTo('/')
-      }
+    const result = await verifyOtp(otp.value)
+    if (result.success) {
+      status.value = 'MFA verified'
     } else {
-      console.log('error: MFA verification failed')
+      status.value = 'MFA verification failed'
     }
   } catch (error) {
-    console.error('Navigation error:', error)
+    console.error(error)
   }
 }
 </script>

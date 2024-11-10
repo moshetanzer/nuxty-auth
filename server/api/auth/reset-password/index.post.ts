@@ -5,10 +5,10 @@ export default defineEventHandler(async (event) => {
     await resetPasswordRequest(event)
     return { success: true, message: 'If the email exists in our system, we will send a password reset link to the email address' }
   } catch (error) {
+    await auditLogger('', 'resetPasswordRequest', String((error as Error).message), 'unknown', 'unknown', 'error')
     throw createError({
-      message: (error as Error).message || 'An error occurred',
-      data: { error },
-      status: 400
+      statusCode: 500,
+      statusMessage: 'An error occurred processing your request'
     })
   }
 })

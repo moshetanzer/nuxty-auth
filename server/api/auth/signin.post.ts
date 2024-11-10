@@ -17,4 +17,9 @@ export default defineEventHandler(async (event) => {
   }
 
   await createSession(event, user.id)
+
+  return {
+    success: true,
+    message: 'Successfully signed in'
+  }
 })

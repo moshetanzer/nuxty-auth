@@ -1,7 +1,7 @@
 import crypto from 'crypto'
 import pg from 'pg'
 import argon2 from 'argon2'
-import type { H3Event } from 'h3'
+import type { H3Event, NodeIncomingMessage } from 'h3'
 import type { User, Session } from '#shared/types'
 
 const { Pool } = pg
@@ -55,29 +55,29 @@ function escapeTableName(val: string): string {
   if (val.includes('.')) return val
   return `"${val}"`
 }
-async function hashPassword(password: string): Promise<string | false> {
+async function hashPassword(event: H3Event, password: string): Promise<string | false> {
   try {
     return await argon2.hash(password, ARGON2_CONFIG)
   } catch (error) {
-    await auditLogger('unknown', 'hashPassword', String((error as Error).message), 'unknown', 'unknown', 'error')
+    await auditLogger(event, 'unknown', 'hashPassword', String((error as Error).message), 'error')
     return false
   }
 }
-async function verifyPassword(email: string, password: string, hash: string): Promise<boolean> {
+async function verifyPassword(event: H3Event, email: string, password: string, hash: string): Promise<boolean> {
   try {
     if (await argon2.verify(hash, password)) {
       return true
     } else {
-      await auditLogger(email, 'verifyPassword', 'Password does not match', 'unknown', 'unknown', 'error')
+      await auditLogger(event, email, 'verifyPassword', 'Password does not match', 'error')
       return false
     }
   } catch (error) {
-    await auditLogger(email, 'verifyPassword', String((error as Error).message), 'unknown', 'unknown', 'error')
+    await auditLogger(event, email, 'verifyPassword', String((error as Error).message), 'error')
     return false
   }
 }
 
-async function checkIfLocked(email: string): Promise<boolean> {
+async function checkIfLocked(event: H3Event, email: string): Promise<boolean> {
   try {
     if (!email) {
       throw createError({
@@ -89,34 +89,34 @@ async function checkIfLocked(email: string): Promise<boolean> {
     const result = await authDB.query<User>(`SELECT email, failed_attempts FROM ${AUTH_TABLE_NAME} WHERE email = $1`, [email])
 
     if (!result?.rows?.[0]) {
-      await auditLogger(email, 'checkIfLocked', 'Account not found', 'unknown', 'unknown', 'error')
+      await auditLogger(event, email, 'checkIfLocked', 'Account not found', 'error')
       return false
     }
     const isLocked = result.rows[0].failed_attempts >= Number(MAX_FAILED_ATTEMPTS)
 
     if (isLocked) {
-      await auditLogger(email, 'checkIfLocked', 'Account locked', 'unknown', 'unknown', 'error')
+      await auditLogger(event, email, 'checkIfLocked', 'Account locked', 'error')
       return true
     } else {
       return false
     }
   } catch (error) {
-    await auditLogger(email, 'checkIfLocked', String((error as Error).message), 'unknown', 'unknown', 'error')
+    await auditLogger(event, email, 'checkIfLocked', String((error as Error).message), 'error')
     return false
   }
 }
-async function incrementFailedAttempts(email: string): Promise<void> {
+async function incrementFailedAttempts(event: H3Event, email: string): Promise<void> {
   try {
     await authDB.query(`UPDATE ${AUTH_TABLE_NAME} SET failed_attempts = failed_attempts + 1 WHERE email = $1`, [email])
   } catch (error) {
-    await auditLogger(email, 'incrementFailedAttempts', String((error as Error).message), 'unknown', 'unknown', 'error')
+    await auditLogger(event, email, 'incrementFailedAttempts', String((error as Error).message), 'error')
   }
 }
-async function resetFailedAttempts(email: string): Promise<void> {
+async function resetFailedAttempts(event: H3Event, email: string): Promise<void> {
   try {
     await authDB.query(`UPDATE ${AUTH_TABLE_NAME} SET failed_attempts = 0 WHERE email = $1`, [email])
   } catch (error) {
-    await auditLogger(email, 'resetFailedAttempts', String((error as Error).message), 'unknown', 'unknown', 'error')
+    await auditLogger(event, email, 'resetFailedAttempts', String((error as Error).message), 'error')
   }
 }
 
@@ -134,13 +134,13 @@ export async function authenticateUser(event: H3Event): Promise<User | null> {
     const result = await authDB.query(`SELECT * FROM ${AUTH_TABLE_NAME} WHERE email = $1`, [email])
 
     if (result.rows.length === 0) {
-      await verifyPassword(email, password, '$argon2id$v=19$m=16,t=2,p=1$d050OUJMT1RzckoxbGdxYQ$+CQAgx/TccW9Ul/85vo7tg')
+      await verifyPassword(event, email, password, '$argon2id$v=19$m=16,t=2,p=1$d050OUJMT1RzckoxbGdxYQ$+CQAgx/TccW9Ul/85vo7tg')
       return null
     }
 
     const user = result.rows[0]
 
-    const locked = await checkIfLocked(user.email)
+    const locked = await checkIfLocked(event, user.email)
     if (locked) {
       throw createError({
         statusCode: 401,
@@ -148,18 +148,19 @@ export async function authenticateUser(event: H3Event): Promise<User | null> {
       })
     }
 
-    const isValid = await verifyPassword(user.email, password, user.password)
+    const isValid = await verifyPassword(event, user.email, password, user.password)
     if (!isValid) {
-      await incrementFailedAttempts(user.email)
+      await incrementFailedAttempts(event, user.email)
+      await auditLogger(event, email, 'authenticateUser', 'Invalid email or password', 'error')
       throw createError({
         statusCode: 401,
         statusMessage: 'Invalid email or password'
       })
     }
-    await resetFailedAttempts(user.email)
+    await resetFailedAttempts(event, user.email)
     return user
   } catch (error) {
-    await auditLogger(email, 'authenticateUser', String((error as Error).message), 'unknown', 'unknown', 'error')
+    await auditLogger(event, email, 'authenticateUser', String((error as Error).message), 'error')
     return null
   }
 }
@@ -180,7 +181,7 @@ export async function createUser(event: H3Event): Promise<string | null> {
   const role = useRuntimeConfig(event).defaultUserRole || 'user'
   try {
     const userId = crypto.randomUUID()
-    const hashedPassword = await hashPassword(password)
+    const hashedPassword = await hashPassword(event, password)
 
     const result = await authDB.query(`
       INSERT INTO ${AUTH_TABLE_NAME} (id, fname, lname, email, password, role, failed_attempts)
@@ -189,7 +190,7 @@ export async function createUser(event: H3Event): Promise<string | null> {
     `, [userId, fname, lname, email, hashedPassword, role])
     return result.rows[0].id
   } catch (error) {
-    await auditLogger(email, 'createUser', String((error as Error).message), 'unknown', 'unknown', 'error')
+    await auditLogger(event, email, 'createUser', String((error as Error).message), 'error')
     return null
   }
 }
@@ -224,7 +225,7 @@ export async function createSession(event: H3Event, userId: string): Promise<voi
       secure: true
     })
   } catch (error) {
-    await auditLogger(email, 'createSession', String((error as Error).message), 'unknown', 'unknown', 'error')
+    await auditLogger(event, email, 'createSession', String((error as Error).message), 'error')
   }
 }
 export async function handleSession(event: H3Event): Promise<boolean> {
@@ -267,15 +268,14 @@ export async function handleSession(event: H3Event): Promise<boolean> {
     if (expiresAt <= slidingWindowThreshold) {
       try {
       // Extend session expiration
-        await refreshSession(sessionId)
+        await refreshSession(event, sessionId)
       } catch (refreshError) {
         await auditLogger(
+          event,
           sessionRow.email,
           'sessionRefresh',
           `Automatic session refresh failed: ${String(refreshError)}`,
-          'unknown',
-          'unknown',
-          'warning'
+          'error'
         )
       // Continue with existing session even if refresh fails
       }
@@ -316,12 +316,12 @@ export async function handleSession(event: H3Event): Promise<boolean> {
     event.context.session = null
     event.context.user = null
     await deleteSession(event)
-    await auditLogger('unknown', 'handleSession', String((error as Error).message), 'unknown', 'unknown', 'error')
+    await auditLogger(event, 'unknown', 'handleSession', String((error as Error).message), 'error')
     return false
   }
 }
 
-export async function refreshSession(sessionId: string): Promise<void> {
+export async function refreshSession(event: H3Event, sessionId: string): Promise<void> {
   try {
     await authDB.query(`
       UPDATE ${SESSION_TABLE_NAME}
@@ -329,21 +329,19 @@ export async function refreshSession(sessionId: string): Promise<void> {
       WHERE id = $2
     `, [SESSION_TOTAL_DURATION, sessionId])
   } catch (error) {
-    await auditLogger('unknown', 'refreshSession', String((error as Error).message), 'unknown', 'unknown', 'error')
+    await auditLogger(event, 'unknown', 'refreshSession', String((error as Error).message), 'error')
     console.error('Failed to refresh session:', error)
   }
 }
 export async function handleRateLimit(event: H3Event): Promise<void> {
-  const storage = useStorage()
   const ip = getClientIP(event)
-  const userAgent = event.node.req.headers['user-agent'] as string
   const key = `rate-limit:${ip}`
 
   const [current, ttl] = await storage.getItem<[number, number]>(key) || [0, 0]
 
   if (current >= RATE_LIMIT) {
     setRateLimitHeaders(event, current, ttl)
-    await auditLogger('unknown', 'handleRateLimit', 'Too many requests', ip, userAgent, 'error')
+    await auditLogger(event, 'unknown', 'handleRateLimit', 'Too many requests', 'error')
     throw createError({
       statusCode: 429,
       statusMessage: 'Too Many Requests'
@@ -376,10 +374,10 @@ export async function deleteSession(event: H3Event): Promise<void> {
     await authDB.query(`DELETE FROM ${SESSION_TABLE_NAME} WHERE id = $1`, [sessionId])
     deleteCookie(event, 'mediCloudID')
   } catch (error) {
-    await auditLogger('unknown', 'deleteSession', String((error as Error).message), 'unknown', 'unknown', 'error')
+    await auditLogger(event, 'unknown', 'deleteSession', String((error as Error).message), 'error')
   }
 }
-export async function cleanupExpiredSessions(): Promise<void> {
+export async function cleanupExpiredSessions(event: H3Event): Promise<void> {
   try {
     await authDB.query(`
           DELETE FROM ${SESSION_TABLE_NAME}
@@ -388,7 +386,7 @@ export async function cleanupExpiredSessions(): Promise<void> {
     [SESSION_TOTAL_DURATION + SESSION_EXTENSION_DURATION]
     )
   } catch (error) {
-    await auditLogger('system', 'cleanupExpiredSessions', String((error as Error).message), 'unknown', 'unknown', 'error')
+    await auditLogger(event, 'system', 'cleanupExpiredSessions', String((error as Error).message), 'error')
   }
 }
 
@@ -397,6 +395,7 @@ export async function resetPasswordRequest(event: H3Event) {
     const { email } = await readBody(event)
 
     if (!email) {
+      await auditLogger(event, '', 'resetPasswordRequest', 'Email is required', 'error')
       throw createError({
         statusCode: 400,
         statusMessage: 'Email is required'
@@ -404,11 +403,10 @@ export async function resetPasswordRequest(event: H3Event) {
     }
     const user = await authDB.query<User>(`SELECT id, email, reset_token, reset_token_expires_at FROM users WHERE email = $1`, [email]).catch(async (error) => {
       await auditLogger(
+        event,
         email,
         'resetPasswordRequest',
         `Database error: ${String((error as Error).message)}`,
-        'unknown',
-        'unknown',
         'error'
       )
       throw createError({
@@ -426,7 +424,7 @@ export async function resetPasswordRequest(event: H3Event) {
       resetTokenExpiry = new Date(Date.now() + 60 * 60 * 1000)
       hashedToken = crypto.createHash('sha256').update(resetToken).digest('hex')
       const errorEmailAddress = useRuntimeConfig().emailUser
-      await auditLogger(email, 'resetPasswordRequest', 'Email not found', 'unknown', 'unknown', 'error')
+      await auditLogger(event, email, 'resetPasswordRequest', 'Email not found', 'error')
       await sendEmail(errorEmailAddress, 'Password reset failed - ensure no timing attack', `Click <a href="${useRuntimeConfig().baseUrl}/reset-password/${resetToken}">here</a> to reset your password.`)
 
       return true
@@ -452,11 +450,10 @@ export async function resetPasswordRequest(event: H3Event) {
       WHERE email = $3
     `, [hashedToken, resetTokenExpiry, email]).catch(async (error) => {
       await auditLogger(
+        event,
         email,
         'resetPasswordRequest',
         `Token update failed: ${String((error as Error).message)}`,
-        'unknown',
-        'unknown',
         'error'
       )
       throw createError({
@@ -467,11 +464,10 @@ export async function resetPasswordRequest(event: H3Event) {
 
     await sendEmail(email, 'Password Reset Request', `Click <a href="${useRuntimeConfig().baseUrl}/reset-password/${resetToken}">here</a> to reset your password.`).catch(async (error) => {
       await auditLogger(
+        event,
         email,
         'resetPasswordRequest',
         `Email sending failed: ${String((error as Error).message)}`,
-        'unknown',
-        'unknown',
         'error'
       )
       throw createError({
@@ -481,7 +477,7 @@ export async function resetPasswordRequest(event: H3Event) {
     })
     return true
   } catch (error) {
-    await auditLogger('unknown', 'resetPasswordRequest', String((error as Error).message), 'unknown', 'unknown', 'error')
+    await auditLogger(event, 'unknown', 'resetPasswordRequest', String((error as Error).message), 'error')
     throw createError({
       statusCode: 500,
       statusMessage: 'An unexpected error occurred'
@@ -503,28 +499,28 @@ export async function verifyResetToken(event: H3Event) {
     try {
       hashedToken = crypto.createHash('sha256').update(token).digest('hex')
     } catch (error) {
-      await auditLogger('unknown', 'verifyResetToken', String((error as Error).message), 'unknown', 'unknown', 'error')
+      await auditLogger(event, 'unknown', 'verifyResetToken', String((error as Error).message), 'error')
       throw createError({
         statusCode: 500,
         statusMessage: 'Failed to process reset token'
       })
     }
     const result = await authDB.query<User>(`SELECT * FROM users WHERE reset_token = $1 AND reset_token_expires_at > NOW()`, [hashedToken]).catch(async (error) => {
-      await auditLogger('unknown', 'verifyResetToken', String((error as Error).message), 'unknown', 'unknown', 'error')
+      await auditLogger(event, 'unknown', 'verifyResetToken', String((error as Error).message), 'error')
       throw createError({
         statusCode: 500,
         statusMessage: 'Error verifying reset token'
       })
     })
     if (result.rows.length === 0) {
-      await auditLogger('unknown', 'verifyResetToken', 'Invalid token', 'unknown', 'unknown', 'error')
+      await auditLogger(event, 'unknown', 'verifyResetToken', 'Invalid token', 'error')
       return false
     } else if (result.rows.length === 1) {
-      await auditLogger(result.rows[0].email, 'verifyResetToken', 'Token verified', 'unknown', 'unknown', 'success')
+      await auditLogger(event, result.rows[0].email, 'verifyResetToken', 'Token verified', 'success')
       return true
     }
   } catch (error) {
-    await auditLogger('unknown', 'verifyResetToken', String((error as Error).message), 'unknown', 'unknown', 'error')
+    await auditLogger(event, 'unknown', 'verifyResetToken', String((error as Error).message), 'error')
     throw createError({
       statusCode: 500,
       statusMessage: 'An unexpected error occurred'
@@ -553,14 +549,14 @@ export async function resetPassword(event: H3Event) {
     try {
       hashedToken = crypto.createHash('sha256').update(resetToken).digest('hex')
     } catch (error) {
-      await auditLogger('unknown', 'resetPassword', String((error as Error).message), 'unknown', 'unknown', 'error')
+      await auditLogger(event, 'unknown', 'resetPassword', String((error as Error).message), 'error')
       throw createError({
         statusCode: 500,
         statusMessage: 'Failed to process reset token'
       })
     }
     const result = await authDB.query<User>(`SELECT * FROM users WHERE reset_token = $1 AND reset_token_expires_at > NOW()`, [hashedToken]).catch(async (error) => {
-      await auditLogger('unknown', 'resetPassword', String((error as Error).message), 'unknown', 'unknown', 'error')
+      await auditLogger(event, 'unknown', 'resetPassword', String((error as Error).message), 'error')
       throw createError({
         statusCode: 500,
         statusMessage: 'Database error while checking reset token'
@@ -574,15 +570,14 @@ export async function resetPassword(event: H3Event) {
       })
     }
 
-    const hashedPassword = await hashPassword(password)
+    const hashedPassword = await hashPassword(event, password)
 
     await authDB.query(`UPDATE users SET password = $1, reset_token = NULL, reset_token_expires_at = NULL WHERE id = $2`, [hashedPassword, user.id]).catch(async (error) => {
       await auditLogger(
+        event,
         user.email,
         'resetPassword',
         String((error as Error).message),
-        'unknown',
-        'unknown',
         'error'
       )
       throw createError({
@@ -592,11 +587,10 @@ export async function resetPassword(event: H3Event) {
     })
 
     await auditLogger(
+      event,
       user.email,
       'resetPassword',
       'Password reset successful',
-      'unknown',
-      'unknown',
       'success'
     ).catch(() => {
       console.error('Failed to log password reset success')
@@ -604,7 +598,7 @@ export async function resetPassword(event: H3Event) {
 
     return true
   } catch (error) {
-    await auditLogger('unknown', 'resetPassword', String((error as Error).message), 'unknown', 'unknown', 'error')
+    await auditLogger(event, 'unknown', 'resetPassword', String((error as Error).message), 'error')
     throw createError({
       statusCode: 500,
       statusMessage: 'An unexpected error occurred'
@@ -621,26 +615,20 @@ export async function roleBasedAuth(event: H3Event) {
   }
 
   if (!event.context.user?.role) {
-    const ip = getRequestIP(event) as string
-    const userAgent = event.node.req.headers['user-agent'] as string
-    await auditLogger('unknown', 'roleBasedAuth', 'Unauthorized', ip, userAgent, 'error')
+    await auditLogger(event, 'unknown', 'roleBasedAuth', 'Unauthorized', 'error')
     console.log('Unauthorized: No role')
     return event.node.res.writeHead(403).end('Unauthorized: No role')
   }
 
   const userRole = event.context.user?.role as string
   if (!hasRequiredRole(userRole, rules)) {
-    const ip = getRequestIP(event) as string
-    const userAgent = event.node.req.headers['user-agent'] as string
-    auditLogger(event.context.user?.email ?? 'unknown', 'roleBasedAuth', 'Unauthorized', ip, userAgent, 'error')
+    auditLogger(event, event.context.user?.email ?? 'unknown', 'roleBasedAuth', 'Unauthorized', 'error')
     console.log('Unauthorized: Insufficient role')
     return event.node.res.writeHead(403).end('Unauthorized: Insufficient role')
   }
 
   if (to && !checkAccess(userRole, to, rules)) {
-    const ip = getRequestIP(event) as string
-    const userAgent = event.node.req.headers['user-agent'] as string
-    auditLogger(event.context.user?.email ?? 'unknown', 'roleBasedAuth', 'Unauthorized', ip, userAgent, 'error')
+    auditLogger(event, event.context.user?.email ?? 'unknown', 'roleBasedAuth', 'Unauthorized', 'error')
     console.log('Unauthorized: No access to this route')
     return event.node.res.writeHead(403).end('Unauthorized: No access to this route')
   }
@@ -674,9 +662,7 @@ export async function handleCsrf(event: H3Event) {
     if (event.node.req.method !== 'GET') {
       const originHeader = getHeader(event, 'Origin') ?? null
       const hostHeader = getHeader(event, 'Host') ?? null
-      console.log('originHeader', originHeader)
-      console.log('hostHeader', hostHeader)
-      if (!originHeader || !hostHeader || !verifyRequestOrigin(originHeader, [hostHeader])) {
+      if (!originHeader || !hostHeader || !verifyRequestOrigin(event, originHeader, [hostHeader])) {
         console.log('Invalid origin')
         return event.node.res.writeHead(403).end('Invalid origin')
       }
@@ -693,10 +679,8 @@ function generateOTP(): string {
 export async function saveAndSendOTP(event: H3Event) {
   const email = event.context.user?.email
   const userId = event.context.user?.id
-  const ip = getRequestIP(event) || 'unknown'
-  const useragent = event.node.req.headers['user-agent'] as string
   if (!email || !userId) {
-    await auditLogger('', 'saveAndSendOTP', 'Email or user ID not found', ip, useragent, 'error')
+    await auditLogger(event, '', 'saveAndSendOTP', 'Email or user ID not found', 'error')
     throw createError({
       statusCode: 400,
       statusMessage: 'Email or user ID not found'
@@ -708,32 +692,30 @@ export async function saveAndSendOTP(event: H3Event) {
     [userId, otp]
   ).catch(async (error) => {
     await auditLogger(
+      event,
       email,
       'saveAndSendOTP',
       String((error as Error).message),
-      'unknown',
-      'unknown',
       'error'
     )
   })
   await sendEmail(email, 'Your OTP', `Your OTP is: ${otp}`).catch(async (error) => {
     await auditLogger(
+      event,
       email,
       'saveAndSendOTP',
       `Email sending failed: ${String((error as Error).message)}`,
-      'unknown',
-      'unknown',
       'error'
     )
   })
 }
-export async function verifyOTP(event: H3Event): Promise<boolean> {
+export async function verifyOTP(event: H3Event) {
   const { otp } = await readBody(event)
   const userId = event.context.user?.id
   const email = event.context.user?.email
 
   if (!userId || !email) {
-    await auditLogger('', 'verifyOTP', 'User ID or email not found', 'unknown', 'unknown', 'error')
+    await auditLogger(event, '', 'verifyOTP', 'User ID or email not found', 'error')
     throw createError({
       statusCode: 400,
       statusMessage: 'User ID or email not found'
@@ -753,11 +735,10 @@ export async function verifyOTP(event: H3Event): Promise<boolean> {
     // If no valid OTP found, return false
     if (!result.rows || result.rows.length === 0) {
       await auditLogger(
+        event,
         email,
         'verifyOTP',
         'Invalid or expired OTP',
-        'unknown',
-        'unknown',
         'error'
       )
       return false
@@ -776,22 +757,20 @@ export async function verifyOTP(event: H3Event): Promise<boolean> {
     )
 
     await auditLogger(
+      event,
       email,
       'verifyOTP',
       'OTP verified successfully',
-      'unknown',
-      'unknown',
       'info'
     )
 
     return true
   } catch (error) {
     await auditLogger(
+      event,
       email,
       'verifyOTP',
       String((error as Error).message),
-      'unknown',
-      'unknown',
       'error'
     )
     return false
@@ -801,14 +780,14 @@ export async function activateMFA(event: H3Event): Promise<boolean> {
   const email = event.context.user?.email
   const userId = event.context.user?.id
   if (!userId) {
-    await auditLogger('', 'activateMFA', 'User ID not found', 'unknown', 'unknown', 'error')
+    await auditLogger(event, '', 'activateMFA', 'User ID not found', 'error')
     throw createError({
       statusCode: 400,
       statusMessage: 'User ID not found'
     })
   }
   if (!email) {
-    await auditLogger('', 'activateMFA', 'Email not found', 'unknown', 'unknown', 'error')
+    await auditLogger(event, '', 'activateMFA', 'Email not found', 'error')
     throw createError({
       statusCode: 400,
       statusMessage: 'Email not found'
@@ -817,11 +796,10 @@ export async function activateMFA(event: H3Event): Promise<boolean> {
 
   await authDB.query(`UPDATE ${AUTH_TABLE_NAME} SET mfa = true WHERE id = $1`, [userId]).catch(async (error) => {
     await auditLogger(
+      event,
       email,
       'activateMFA',
       String((error as Error).message),
-      'unknown',
-      'unknown',
       'error'
     )
     return false
@@ -833,14 +811,14 @@ export async function deactivateMFA(event: H3Event): Promise<boolean> {
   const email = event.context.user?.email
   const userId = event.context.user?.id
   if (!userId) {
-    await auditLogger('', 'deactivateMFA', 'User ID not found', 'unknown', 'unknown', 'error')
+    await auditLogger(event, '', 'deactivateMFA', 'User ID not found', 'error')
     throw createError({
       statusCode: 400,
       statusMessage: 'User ID not found'
     })
   }
   if (!email) {
-    await auditLogger('', 'deactivateMFA', 'Email not found', 'unknown', 'unknown', 'error')
+    await auditLogger(event, '', 'deactivateMFA', 'Email not found', 'error')
     throw createError({
       statusCode: 400,
       statusMessage: 'Email not found'
@@ -849,52 +827,116 @@ export async function deactivateMFA(event: H3Event): Promise<boolean> {
 
   await authDB.query(`UPDATE ${AUTH_TABLE_NAME} SET mfa = false WHERE id = $1`, [userId]).catch(async (error) => {
     await auditLogger(
+      event,
       email,
       'deactivateMFA',
       String((error as Error).message),
-      'unknown',
-      'unknown',
       'error'
     )
     return false
   })
   return true
 }
-export async function auditLogger(email: string, action: string, message: string, ip: string, userAgent: string, status: string) {
+export async function auditLogger(event: H3Event, email: string, action: string, message: string, status: string) {
+  const req = event.node.req
+  const getClientInfo = (req: NodeIncomingMessage) => {
+    const ip = (() => {
+      const forwardedFor = req.headers['x-forwarded-for']
+      if (forwardedFor) {
+        // Get the first IP in the chain (original client)
+        const ips = (Array.isArray(forwardedFor) ? forwardedFor[0] : forwardedFor).split(',').map(ip => ip.trim())
+        return ips[0]
+      }
+      const realIp = req.headers['x-real-ip']
+      if (realIp) {
+        return realIp
+      }
+
+      // Fall back to connection remote address
+      return req.connection.remoteAddress
+        || req.socket.remoteAddress
+        || null
+    })()
+
+    const userAgent = req.headers['user-agent'] || 'Unknown'
+
+    // Clean and validate IP
+    const cleanIp = (() => {
+      if (!ip) return null
+
+      // Remove IPv6 prefix if present
+      const cleaned = (typeof ip === 'string' ? ip : ip[0]).replace(/^::ffff:/, '')
+
+      // Basic IPv4 validation
+      const ipv4Regex = /^(\d{1,3}\.){3}\d{1,3}$/
+      if (ipv4Regex.test(cleaned)) {
+        const parts = cleaned.split('.')
+        const valid: boolean = parts.every((part: string): boolean => {
+          const num: number = parseInt(part, 10)
+          return num >= 0 && num <= 255
+        })
+        return valid ? cleaned : null
+      }
+
+      // Basic IPv6 validation
+      const ipv6Regex = /^([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}$/
+      if (ipv6Regex.test(cleaned)) {
+        return cleaned
+      }
+
+      return null
+    })()
+
+    return {
+      ip: cleanIp,
+      userAgent,
+      originalIp: ip,
+      isProxy: ip !== cleanIp,
+      headers: {
+        forwarded: req.headers['forwarded'] || null,
+        forwardedFor: req.headers['x-forwarded-for'] || null,
+        realIp: req.headers['x-real-ip'] || null
+      }
+    }
+  }
+
+  const ip = getClientInfo(req).ip || getClientInfo(req).originalIp || 'unknown'
+  const userAgent = getClientInfo(req).userAgent || 'unknown'
+
   try {
     await authDB.query(`INSERT INTO audit_logs(email, action, message, ip, user_agent, status) VALUES($1, $2, $3, $4, $5, $6)`, [email, action, message, ip, userAgent, status])
   } catch (error) {
     console.error(error)
   }
 }
-export function verifyRequestOrigin(origin: string, allowedDomains: string[]): boolean {
+export function verifyRequestOrigin(event: H3Event, origin: string, allowedDomains: string[]): boolean {
   if (!origin || allowedDomains.length === 0) {
-    auditLogger('origin: ' + origin, 'verifyRequestOrigin', 'Invalid origin or allowedDomains', 'unknown', 'unknown', 'error')
+    auditLogger(event, 'origin: ' + origin, 'verifyRequestOrigin', 'Invalid origin or allowedDomains', 'error')
     return false
   }
-  const originHost = safeURL(origin)?.host ?? null
+  const originHost = safeURL(event, origin)?.host ?? null
   if (!originHost) {
-    auditLogger('origin: ' + origin, 'verifyRequestOrigin', 'Invalid origin host', 'unknown', 'unknown', 'error')
+    auditLogger(event, 'origin: ' + origin, 'verifyRequestOrigin', 'Invalid origin host', 'error')
     return false
   }
   for (const domain of allowedDomains) {
     let host: string | null
     if (domain.startsWith('http://') || domain.startsWith('https://')) {
-      host = safeURL(domain)?.host ?? null
+      host = safeURL(event, domain)?.host ?? null
     } else {
-      host = safeURL('https://' + domain)?.host ?? null
+      host = safeURL(event, 'https://' + domain)?.host ?? null
     }
     if (originHost === host) return true
   }
-  auditLogger('origin: ' + origin, 'verifyRequestOrigin', 'Origin not allowed', 'unknown', 'unknown', 'error')
+  auditLogger(event, 'origin: ' + origin, 'verifyRequestOrigin', 'Origin not allowed', 'error')
   return false
 }
 
-function safeURL(url: URL | string): URL | null {
+function safeURL(event: H3Event, url: URL | string): URL | null {
   try {
     return new URL(url)
   } catch {
-    auditLogger('url: ' + url, 'safeURL', 'Invalid URL', 'unknown', 'unknown', 'error')
+    auditLogger(event, 'url: ' + url, 'safeURL', 'Invalid URL', 'error')
     return null
   }
 }

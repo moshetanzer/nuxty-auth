@@ -2,10 +2,10 @@ import type { UserWithSession } from '#shared/types'
 
 export const useAuth = () => {
   const user = useState<UserWithSession | null>('user', () => null)
+  const route = useRoute()
 
   async function signIn(email: string, password: string) {
     const status = ref('')
-    const route = useRoute()
     try {
       await $fetch('/api/auth/signin', {
         method: 'POST',
@@ -38,10 +38,41 @@ export const useAuth = () => {
       console.error(err)
     }
   }
-
-  const verifyToken = async (resetToken: string) => {
+  async function sendOtp() {
     try {
-      const response = await $fetch(`/api/auth/reset-password/verify/${resetToken}`, {
+      await $fetch('/api/auth/mfa/email/generate',
+        { method: 'POST' }
+      )
+    } catch (error) {
+      console.error(error)
+      throw error
+    }
+  }
+  async function verifyOtp(otp: string) {
+    try {
+      const result = await $fetch('/api/auth/mfa/email', {
+        method: 'POST',
+        body: JSON.stringify({
+          otp
+        })
+      })
+      if (result === true) {
+        if (route.query.redirect) {
+          await navigateTo(route.query.redirect as string)
+        } else {
+          await navigateTo('/')
+        }
+      } else {
+        console.log('error: MFA verification failed')
+      }
+    } catch (error) {
+      console.error('Navigation error:', error)
+      throw error
+    }
+  }
+  async function verifyToken(token: string) {
+    try {
+      const response = await $fetch(`/api/auth/reset-password/verify/${token}`, {
         method: 'GET',
         headers: {
           'Content-Type': 'application/json'
@@ -61,6 +92,8 @@ export const useAuth = () => {
     user,
     signOut,
     verifyToken,
-    signIn
+    signIn,
+    sendOtp,
+    verifyOtp
   }
 }
