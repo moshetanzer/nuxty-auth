@@ -48,7 +48,8 @@ export const useAuth = () => {
       throw error
     }
   }
-  async function verifyOtp(otp: string) {
+  async function verifyOtp(otp: string): Promise<void> {
+    const status = ref('')
     try {
       const result = await $fetch('/api/auth/mfa/email', {
         method: 'POST',
@@ -56,13 +57,15 @@ export const useAuth = () => {
           otp
         })
       })
-      if (result === true) {
+      if (result.success) {
         if (route.query.redirect) {
+          status.value = 'MFA verification successful'
           await navigateTo(route.query.redirect as string)
         } else {
           await navigateTo('/')
         }
       } else {
+        status.value = 'MFA verification failed'
         console.log('error: MFA verification failed')
       }
     } catch (error) {

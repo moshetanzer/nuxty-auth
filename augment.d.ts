@@ -16,3 +16,21 @@ declare module 'nitropack' {
     nuxtyAuth?: NuxtAuthConfig
   }
 }
+
+declare module '#app' {
+  interface PageMeta {
+    auth?: { roles: string[]
+      emailVerification?: boolean
+      multiFactor?: boolean
+    } | boolean
+  }
+}
+
+declare module 'vue-router' {
+  interface RouteMeta {
+    auth?: { roles: string[]
+      emailVerification?: boolean
+      multiFactor?: boolean
+    } | boolean
+  }
+}
