@@ -8,7 +8,7 @@ definePageMeta({
     roles: ['user']
   }
 })
-const user = useUser()
+const { user, signOut } = useAuth()
 </script>
 
 <template>
@@ -18,7 +18,7 @@ const user = useUser()
       Home
     </NuxtLink>
     <ActivateMfa />
-    <button @click="useSignOut()">
+    <button @click="signOut()">
       Sign Out
     </button>
   </div>

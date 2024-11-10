@@ -43,7 +43,7 @@ async function useVerifyMfaDeactivate() {
     console.error(error)
   }
 }
-const mfaActive = useUser().value?.mfa
+const mfaActive = useAuth().user?.mfa
 </script>
 
 <template>

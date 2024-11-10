@@ -1,7 +1,11 @@
 export default defineEventHandler(async (event) => {
   try {
-    await verifyOTP(event)
-    return true
+    const result = await verifyOTP(event)
+    if (result) {
+      return true
+    } else {
+      return false
+    }
   } catch (err) {
     await auditLogger('', 'verifyOTP', String((err as Error).message), 'unknown', 'unknown', 'error')
     return false

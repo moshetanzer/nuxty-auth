@@ -1,5 +1,5 @@
 export default defineNuxtRouteMiddleware((to, from) => {
-  const user = useUser()
+  const { user } = useAuth()
   if (!user.value) {
     return navigateTo({
       path: '/signin',
@@ -8,7 +8,10 @@ export default defineNuxtRouteMiddleware((to, from) => {
   }
   if (user.value.mfa) {
     if (!user.value.mfa_verified) {
-      return navigateTo('/multi-factor')
+      return navigateTo({
+        path: '/multi-factor',
+        query: to.fullPath !== '/' ? { redirect: to.fullPath } : {}
+      })
     }
   }
   if (to.meta.auth) {

@@ -6,7 +6,7 @@ import type { User, Session } from '#shared/types'
 
 const { Pool } = pg
 const config = useRuntimeConfig()
-
+const storage = useStorage()
 const connectionString = config.authConnectionString
 const authDB = new Pool({
   connectionString
@@ -727,7 +727,6 @@ export async function saveAndSendOTP(event: H3Event) {
     )
   })
 }
-
 export async function verifyOTP(event: H3Event): Promise<boolean> {
   const { otp } = await readBody(event)
   const userId = event.context.user?.id
@@ -741,7 +740,52 @@ export async function verifyOTP(event: H3Event): Promise<boolean> {
     })
   }
 
-  await authDB.query(`SELECT * FROM ${MFA_TABLE_NAME} WHERE user_id = $1 AND secret = $2 AND created_at > NOW() - (INTERVAL '1 minute' * $3)`, [userId, otp, EMAIL_OTP_EXPIRY]).catch(async (error) => {
+  try {
+    // Check if valid OTP exists
+    const result = await authDB.query(
+      `SELECT * FROM ${MFA_TABLE_NAME} 
+       WHERE user_id = $1 
+       AND secret = $2 
+       AND created_at > NOW() - (INTERVAL '1 minute' * $3)`,
+      [userId, otp, EMAIL_OTP_EXPIRY]
+    )
+
+    // If no valid OTP found, return false
+    if (!result.rows || result.rows.length === 0) {
+      await auditLogger(
+        email,
+        'verifyOTP',
+        'Invalid or expired OTP',
+        'unknown',
+        'unknown',
+        'error'
+      )
+      return false
+    }
+
+    // Update session to mark MFA as verified
+    await authDB.query(
+      `UPDATE ${SESSION_TABLE_NAME} SET mfa_verified = true WHERE user_id = $1`,
+      [userId]
+    )
+
+    // Clean up used OTP
+    await authDB.query(
+      `DELETE FROM ${MFA_TABLE_NAME} WHERE user_id = $1`,
+      [userId]
+    )
+
+    await auditLogger(
+      email,
+      'verifyOTP',
+      'OTP verified successfully',
+      'unknown',
+      'unknown',
+      'info'
+    )
+
+    return true
+  } catch (error) {
     await auditLogger(
       email,
       'verifyOTP',
@@ -751,33 +795,8 @@ export async function verifyOTP(event: H3Event): Promise<boolean> {
       'error'
     )
     return false
-  })
-
-  await authDB.query(`UPDATE ${SESSION_TABLE_NAME} SET mfa_verified = true WHERE user_id = $1`, [userId]).catch(async (error) => {
-    await auditLogger(
-      email,
-      'verifyOTP',
-      String((error as Error).message),
-      'unknown',
-      'unknown',
-      'error'
-    )
-    return false
-  })
-
-  await authDB.query(`DELETE FROM ${MFA_TABLE_NAME} WHERE user_id = $1`, [userId]).catch(async (error) => {
-    await auditLogger(
-      email,
-      'verifyOTP',
-      String((error as Error).message),
-      'unknown',
-      'unknown',
-      'error'
-    )
-  })
-  return true
+  }
 }
-
 export async function activateMFA(event: H3Event): Promise<boolean> {
   const email = event.context.user?.email
   const userId = event.context.user?.id

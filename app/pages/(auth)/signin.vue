@@ -8,28 +8,13 @@ definePageMeta({
 const email = ref('')
 const password = ref('')
 const status = ref('')
-const route = useRoute()
-async function signIn() {
+
+const { signIn } = useAuth()
+async function handleSubmit() {
   try {
-    await $fetch('/api/auth/signin', {
-      method: 'POST',
-      body: {
-        email: email.value,
-        password: password.value
-      }
-    })
-    if (route.query.redirect) {
-      // this is safe since nuxt will throw error if redirect is out of app
-      navigateTo(route.query.redirect as string)
-    } else {
-      navigateTo('/')
-    }
-  } catch (error: unknown) {
-    if (error instanceof Error) {
-      status.value = error.message
-    } else {
-      status.value = 'Unknown error'
-    }
+    await signIn(email.value, password.value)
+  } catch (error) {
+    console.error('Sign in error:', error)
   }
 }
 </script>
@@ -39,7 +24,7 @@ async function signIn() {
     <h1>Sign In</h1>
     <form
       method="post"
-      @submit.prevent="signIn"
+      @submit.prevent="handleSubmit"
     >
       <label for="email">Email</label>
       <input

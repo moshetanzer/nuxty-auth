@@ -28,16 +28,26 @@ async function sendOtp() {
 }
 await sendOtp()
 const otp = ref('')
+const route = useRoute()
 async function useVerifyMfa() {
   try {
-    await $fetch('/api/auth/mfa/email', {
+    const result = await $fetch('/api/auth/mfa/email', {
       method: 'POST',
       body: JSON.stringify({
         otp: otp.value
       })
     })
+    if (result === true) {
+      if (route.query.redirect) {
+        await navigateTo(route.query.redirect as string)
+      } else {
+        await navigateTo('/')
+      }
+    } else {
+      console.log('error: MFA verification failed')
+    }
   } catch (error) {
-    console.error(error)
+    console.error('Navigation error:', error)
   }
 }
 </script>
