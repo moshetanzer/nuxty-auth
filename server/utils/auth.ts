@@ -108,6 +108,7 @@ async function checkIfLocked(event: H3Event, email: string): Promise<boolean> {
 async function incrementFailedAttempts(event: H3Event, email: string): Promise<void> {
   try {
     await authDB.query(`UPDATE ${AUTH_TABLE_NAME} SET failed_attempts = failed_attempts + 1 WHERE email = $1`, [email])
+    await auditLogger(event, email, 'incrementFailedAttempts', 'Failed attempts incremented', 'info')
   } catch (error) {
     await auditLogger(event, email, 'incrementFailedAttempts', String((error as Error).message), 'error')
   }
@@ -115,6 +116,7 @@ async function incrementFailedAttempts(event: H3Event, email: string): Promise<v
 async function resetFailedAttempts(event: H3Event, email: string): Promise<void> {
   try {
     await authDB.query(`UPDATE ${AUTH_TABLE_NAME} SET failed_attempts = 0 WHERE email = $1`, [email])
+    await auditLogger(event, email, 'resetFailedAttempts', 'Failed attempts reset', 'info')
   } catch (error) {
     await auditLogger(event, email, 'resetFailedAttempts', String((error as Error).message), 'error')
   }
@@ -142,6 +144,7 @@ export async function authenticateUser(event: H3Event): Promise<User | null> {
 
     const locked = await checkIfLocked(event, user.email)
     if (locked) {
+      await auditLogger(event, email, 'authenticateUser', 'Account locked', 'error')
       throw createError({
         statusCode: 401,
         statusMessage: 'Account locked'
@@ -157,6 +160,7 @@ export async function authenticateUser(event: H3Event): Promise<User | null> {
         statusMessage: 'Invalid email or password'
       })
     }
+    await auditLogger(event, email, 'authenticateUser', 'User authenticated', 'success')
     await resetFailedAttempts(event, user.email)
     return user
   } catch (error) {
@@ -188,6 +192,7 @@ export async function createUser(event: H3Event): Promise<string | null> {
       VALUES ($1, $2, $3, $4, $5, $6, 0)
       RETURNING id
     `, [userId, fname, lname, email, hashedPassword, role])
+    await auditLogger(event, email, 'createUser', 'User created', 'success')
     return result.rows[0].id
   } catch (error) {
     await auditLogger(event, email, 'createUser', String((error as Error).message), 'error')
@@ -217,6 +222,7 @@ export async function createSession(event: H3Event, userId: string): Promise<voi
     `,
     [sessionId, userId, SESSION_TOTAL_DURATION]
     )
+    await auditLogger(event, email, 'createSession', 'Session created', 'success')
     setCookie(event, 'mediCloudID', sessionId, {
       path: '/',
       maxAge: SESSION_TOTAL_DURATION * 60,
@@ -341,7 +347,7 @@ export async function handleRateLimit(event: H3Event): Promise<void> {
 
   if (current >= RATE_LIMIT) {
     setRateLimitHeaders(event, current, ttl)
-    await auditLogger(event, 'unknown', 'handleRateLimit', 'Too many requests', 'error')
+    await auditLogger(event, event.context.user?.email || 'unknown', 'handleRateLimit', 'Too many requests', 'error')
     throw createError({
       statusCode: 429,
       statusMessage: 'Too Many Requests'
@@ -475,6 +481,7 @@ export async function resetPasswordRequest(event: H3Event) {
         statusMessage: 'An error occurred processing your request'
       })
     })
+    await auditLogger(event, email, 'resetPasswordRequest', 'Password reset email sent', 'success')
     return true
   } catch (error) {
     await auditLogger(event, 'unknown', 'resetPasswordRequest', String((error as Error).message), 'error')
@@ -488,8 +495,8 @@ export async function resetPasswordRequest(event: H3Event) {
 export async function verifyResetToken(event: H3Event) {
   try {
     const { resetToken: token } = getRouterParams(event)
-
     if (!token) {
+      await auditLogger(event, 'unknown', 'verifyResetToken', 'Reset token is required', 'error')
       throw createError({
         statusCode: 400,
         statusMessage: 'Reset token is required'
@@ -533,13 +540,15 @@ export async function resetPassword(event: H3Event) {
     const { resetToken, password, confirmPassword } = await readBody(event)
 
     if (!resetToken || !password || !confirmPassword) {
+      await auditLogger(event, 'unknown', 'resetPassword', 'Missing required fields', 'error')
       throw createError({
         statusCode: 400,
-        statusMessage: 'Missing required fields'
+        statusMessage: `Missing required fields (${!resetToken ? 'resetToken' : ''} ${!password ? 'password' : ''} ${!confirmPassword ? 'confirmPassword' : ''})`
       })
     }
 
     if (password !== confirmPassword) {
+      await auditLogger(event, 'unknown', 'resetPassword', 'Passwords do not match', 'error')
       throw createError({
         statusCode: 400,
         statusMessage: 'Passwords do not match'
@@ -564,6 +573,7 @@ export async function resetPassword(event: H3Event) {
     })
     const user = result.rows[0]
     if (!user) {
+      await auditLogger(event, 'unknown', 'resetPassword', 'Invalid token', 'error')
       throw createError({
         statusCode: 400,
         statusMessage: 'Invalid token'
@@ -676,7 +686,7 @@ function generateOTP(): string {
   return num.toString().padStart(6, '0')
 }
 
-export async function saveAndSendOTP(event: H3Event) {
+export async function saveAndSendOTP(event: H3Event): Promise<boolean> {
   const email = event.context.user?.email
   const userId = event.context.user?.id
   if (!email || !userId) {
@@ -708,6 +718,10 @@ export async function saveAndSendOTP(event: H3Event) {
       'error'
     )
   })
+
+  await auditLogger(event, email, 'saveAndSendOTP', 'OTP saved and sent', 'success')
+
+  return true
 }
 export async function verifyOTP(event: H3Event) {
   const { otp } = await readBody(event)
@@ -837,72 +851,17 @@ export async function deactivateMFA(event: H3Event): Promise<boolean> {
   })
   return true
 }
-export async function auditLogger(event: H3Event, email: string, action: string, message: string, status: string) {
-  const req = event.node.req
-  const getClientInfo = (req: NodeIncomingMessage) => {
-    const ip = (() => {
-      const forwardedFor = req.headers['x-forwarded-for']
-      if (forwardedFor) {
-        // Get the first IP in the chain (original client)
-        const ips = (Array.isArray(forwardedFor) ? forwardedFor[0] : forwardedFor).split(',').map(ip => ip.trim())
-        return ips[0]
-      }
-      const realIp = req.headers['x-real-ip']
-      if (realIp) {
-        return realIp
-      }
-
-      // Fall back to connection remote address
-      return req.connection.remoteAddress
-        || req.socket.remoteAddress
-        || null
-    })()
-
-    const userAgent = req.headers['user-agent'] || 'Unknown'
-
-    // Clean and validate IP
-    const cleanIp = (() => {
-      if (!ip) return null
-
-      // Remove IPv6 prefix if present
-      const cleaned = (typeof ip === 'string' ? ip : ip[0]).replace(/^::ffff:/, '')
-
-      // Basic IPv4 validation
-      const ipv4Regex = /^(\d{1,3}\.){3}\d{1,3}$/
-      if (ipv4Regex.test(cleaned)) {
-        const parts = cleaned.split('.')
-        const valid: boolean = parts.every((part: string): boolean => {
-          const num: number = parseInt(part, 10)
-          return num >= 0 && num <= 255
-        })
-        return valid ? cleaned : null
-      }
-
-      // Basic IPv6 validation
-      const ipv6Regex = /^([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}$/
-      if (ipv6Regex.test(cleaned)) {
-        return cleaned
-      }
-
-      return null
-    })()
-
-    return {
-      ip: cleanIp,
-      userAgent,
-      originalIp: ip,
-      isProxy: ip !== cleanIp,
-      headers: {
-        forwarded: req.headers['forwarded'] || null,
-        forwardedFor: req.headers['x-forwarded-for'] || null,
-        realIp: req.headers['x-real-ip'] || null
-      }
-    }
+export async function auditLogger(event: H3Event | null, email: string, action: string, message: string, status: string) {
+  let ip: string
+  let userAgent: string
+  if (event) {
+    const req = event?.node.req
+    ip = getClientInfo(req).ip || getClientInfo(req).originalIp || 'unknown'
+    userAgent = getClientInfo(req).userAgent || 'unknown'
+  } else {
+    ip = 'unknown'
+    userAgent = 'unknown'
   }
-
-  const ip = getClientInfo(req).ip || getClientInfo(req).originalIp || 'unknown'
-  const userAgent = getClientInfo(req).userAgent || 'unknown'
-
   try {
     await authDB.query(`INSERT INTO audit_logs(email, action, message, ip, user_agent, status) VALUES($1, $2, $3, $4, $5, $6)`, [email, action, message, ip, userAgent, status])
   } catch (error) {
@@ -938,5 +897,66 @@ function safeURL(event: H3Event, url: URL | string): URL | null {
   } catch {
     auditLogger(event, 'url: ' + url, 'safeURL', 'Invalid URL', 'error')
     return null
+  }
+}
+
+const getClientInfo = (req: NodeIncomingMessage) => {
+  const ip = (() => {
+    const forwardedFor = req.headers['x-forwarded-for']
+    if (forwardedFor) {
+      // Get the first IP in the chain (original client)
+      const ips = forwardedFor.split(',').map(ip => ip.trim())
+      return ips[0]
+    }
+    const realIp = req.headers['x-real-ip']
+    if (realIp) {
+      return realIp
+    }
+
+    // Fall back to connection remote address
+    return req.connection.remoteAddress
+      || req.socket.remoteAddress
+      || (req.connection.socket ? req.connection.socket.remoteAddress : null)
+  })()
+
+  const userAgent = req.headers['user-agent'] || 'Unknown'
+
+  // Clean and validate IP
+  const cleanIp = (() => {
+    if (!ip) return null
+
+    // Remove IPv6 prefix if present
+    const cleaned = ip.replace(/^::ffff:/, '')
+
+    // Basic IPv4 validation
+    const ipv4Regex = /^(\d{1,3}\.){3}\d{1,3}$/
+    if (ipv4Regex.test(cleaned)) {
+      const parts = cleaned.split('.')
+      const valid = parts.every((part) => {
+        const num = parseInt(part, 10)
+        return num >= 0 && num <= 255
+      })
+      return valid ? cleaned : null
+    }
+
+    // Basic IPv6 validation
+    const ipv6Regex = /^([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}$/
+    if (ipv6Regex.test(cleaned)) {
+      return cleaned
+    }
+
+    return null
+  })()
+
+  return {
+    ip: cleanIp,
+    userAgent,
+    originalIp: ip,
+    isProxy: ip !== cleanIp,
+    headers: {
+      forwarded: req.headers['forwarded'] || null,
+      forwardedFor: req.headers['x-forwarded-for'] || null,
+      realIp: req.headers['x-real-ip'] || null
+    }
   }
 }

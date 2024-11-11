@@ -13,7 +13,7 @@ export default defineEventHandler(async (event) => {
       })
     }
   } catch (err) {
-    await auditLogger('', 'verifyOTP', String((err as Error).message), 'unknown', 'unknown', 'error')
+    await auditLogger(event, event.context.user?.email || 'unknown', 'verifyOTP', String((err as Error).message), 'error')
     throw createError({
       statusCode: 500,
       statusMessage: 'An error occurred processing your request'

@@ -26,6 +26,7 @@ async function sendEmail(to: string, subject: string, text: string) {
       subject,
       html: text
     })
+    await auditLogger(null, to, 'sendEmail', 'Successfully sent email', 'info')
   } catch (error: unknown) {
     console.error(error)
   }

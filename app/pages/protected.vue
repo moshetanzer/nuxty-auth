@@ -17,7 +17,7 @@ const { user, signOut } = useAuth()
     <NuxtLink to="/">
       Home
     </NuxtLink>
-    <ActivateMfa />
+    <ManageMfa />
     <button @click="signOut()">
       Sign Out
     </button>

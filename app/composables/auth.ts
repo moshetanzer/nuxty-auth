@@ -2,9 +2,20 @@ import type { UserWithSession } from '#shared/types'
 
 export const useAuth = () => {
   const user = useState<UserWithSession | null>('user', () => null)
-  const route = useRoute()
 
+  async function updateUser() {
+    try {
+      const data = await useRequestFetch()('/api/auth/session')
+      if (data) {
+        user.value = data
+      }
+    } catch (error) {
+      console.error(error)
+    }
+  }
   async function signIn(email: string, password: string) {
+    const route = useRoute()
+
     const status = ref('')
     try {
       await $fetch('/api/auth/signin', {
@@ -40,7 +51,7 @@ export const useAuth = () => {
   }
   async function sendOtp() {
     try {
-      await $fetch('/api/auth/mfa/email/generate',
+      await $fetch('/api/auth/mfa/email/send',
         { method: 'POST' }
       )
     } catch (error) {
@@ -49,15 +60,17 @@ export const useAuth = () => {
     }
   }
   async function verifyOtp(otp: string): Promise<void> {
+    const route = useRoute()
     const status = ref('')
     try {
-      const result = await $fetch('/api/auth/mfa/email', {
+      const result = await $fetch('/api/auth/mfa/email/verify', {
         method: 'POST',
         body: JSON.stringify({
           otp
         })
       })
       if (result.success) {
+        await updateUser()
         if (route.query.redirect) {
           status.value = 'MFA verification successful'
           await navigateTo(route.query.redirect as string)
@@ -73,7 +86,46 @@ export const useAuth = () => {
       throw error
     }
   }
-  async function verifyToken(token: string) {
+  async function activateMFA(otp: string) {
+    try {
+      const result = await $fetch('/api/auth/mfa/email/activate', {
+        method: 'POST',
+        body: JSON.stringify({
+          otp
+        })
+      })
+      if (result.success) {
+        await updateUser()
+
+        return true
+      } else {
+        return false
+      }
+    } catch (error) {
+      console.error(error)
+      throw error
+    }
+  }
+  async function deactivateMFA(otp: string) {
+    try {
+      const result = await $fetch('/api/auth/mfa/email/deactivate', {
+        method: 'POST',
+        body: JSON.stringify({
+          otp
+        })
+      })
+      if (result.success) {
+        await updateUser()
+        return true
+      } else {
+        return false
+      }
+    } catch (error) {
+      console.error(error)
+      throw error
+    }
+  }
+  async function verifyResetPasswordToken(token: string) {
     try {
       const response = await $fetch(`/api/auth/reset-password/verify/${token}`, {
         method: 'GET',
@@ -94,9 +146,11 @@ export const useAuth = () => {
   return {
     user,
     signOut,
-    verifyToken,
+    verifyResetPasswordToken,
     signIn,
     sendOtp,
-    verifyOtp
+    verifyOtp,
+    activateMFA,
+    deactivateMFA
   }
 }

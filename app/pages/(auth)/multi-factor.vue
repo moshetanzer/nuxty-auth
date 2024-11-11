@@ -1,7 +1,6 @@
 <template>
   <div>
     Multi-Factor
-
     <form
       method="post"
       @submit.prevent="handleSubmit"
@@ -18,19 +17,13 @@
 
 <script setup lang="ts">
 const { sendOtp, verifyOtp } = useAuth()
+const otp = ref('')
 onMounted(async () => {
   await sendOtp()
 })
-const status = ref('')
-const otp = ref('')
 async function handleSubmit() {
   try {
-    const result = await verifyOtp(otp.value)
-    if (result.success) {
-      status.value = 'MFA verified'
-    } else {
-      status.value = 'MFA verification failed'
-    }
+    await verifyOtp(otp.value)
   } catch (error) {
     console.error(error)
   }

@@ -7,7 +7,7 @@ export default defineEventHandler(async (event) => {
       return { success: false, message: 'Reset token verification failed' }
     }
   } catch (error) {
-    await auditLogger('', 'verifyResetToken', String((error as Error).message), 'unknown', 'unknown', 'error')
+    await auditLogger(event, event.context.user?.email || 'unknown', 'verifyResetToken', String((error as Error).message), 'error')
     throw createError({
       statusCode: 500,
       statusMessage: 'An error occurred processing your request'
