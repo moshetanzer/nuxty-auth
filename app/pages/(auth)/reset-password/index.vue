@@ -8,8 +8,8 @@ const { requestPasswordReset } = useAuth()
 
 async function handleSubmit() {
   try {
-    await requestPasswordReset(email.value)
-    status.value = 'Password reset email sent'
+    const result = await requestPasswordReset(email.value)
+    status.value = result
   } catch (error) {
     status.value = error as string || (error as Error).message
     console.error('Request password reset error:', error)

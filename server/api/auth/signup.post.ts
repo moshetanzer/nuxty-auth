@@ -1,5 +1,5 @@
 import { H3Error } from 'h3'
-import { validateEmail, validateName, validatePassword } from '~~/shared/validation'
+import { validateEmail, validateName, validatePassword } from '#shared/validation'
 
 export default defineEventHandler(async (event) => {
   const body = await readBody(event)

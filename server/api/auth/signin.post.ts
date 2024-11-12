@@ -1,4 +1,5 @@
 import { H3Error } from 'h3'
+import { validateEmail, validatePassword } from '#shared/validation'
 
 export default defineEventHandler(async (event) => {
   try {
@@ -8,6 +9,20 @@ export default defineEventHandler(async (event) => {
       throw createError({
         statusCode: 400,
         statusMessage: 'Missing email or password'
+      })
+    }
+    if (!validateEmail(body.email)) {
+      await auditLogger(event, '', 'signUp', 'Invalid email', 'error')
+      return createError({
+        statusCode: 400,
+        statusMessage: 'Invalid email'
+      })
+    }
+    if (validatePassword(body.password) === false) {
+      await auditLogger(event, '', 'signUp', 'Password does not meet requirements', 'error')
+      return createError({
+        statusCode: 400,
+        statusMessage: 'Password does not meet requirements'
       })
     }
     const user = await authenticateUser(event)
