@@ -130,14 +130,19 @@ async function resetFailedAttempts(event: H3Event, email: string): Promise<void>
    * @throws {Error} If the user is locked.
    * @throws {Error} If the email or password is invalid.
    */
-export async function authenticateUser(event: H3Event): Promise<User | null> {
+export async function authenticateUser(event: H3Event): Promise<User> {
   const { email, password } = await readBody(event)
+  console.log(email)
   try {
     const result = await authDB.query(`SELECT * FROM ${AUTH_TABLE_NAME} WHERE email = $1`, [email])
 
     if (result.rows.length === 0) {
       await verifyPassword(event, email, password, '$argon2id$v=19$m=16,t=2,p=1$d050OUJMT1RzckoxbGdxYQ$+CQAgx/TccW9Ul/85vo7tg')
-      return null
+      await auditLogger(event, email, 'authenticateUser', 'Account not found', 'error')
+      throw createError({
+        statusCode: 401,
+        statusMessage: 'Invalid email or password'
+      })
     }
 
     const user = result.rows[0]
@@ -165,7 +170,7 @@ export async function authenticateUser(event: H3Event): Promise<User | null> {
     return user
   } catch (error) {
     await auditLogger(event, email, 'authenticateUser', String((error as Error).message), 'error')
-    return null
+    throw error
   }
 }
 

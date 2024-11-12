@@ -10,10 +10,12 @@ const password = ref('')
 const status = ref('')
 
 const { signIn } = useAuth()
+
 async function handleSubmit() {
   try {
     await signIn(email.value, password.value)
   } catch (error) {
+    status.value = error as string || (error as Error).message
     console.error('Sign in error:', error)
   }
 }
