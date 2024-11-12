@@ -35,6 +35,7 @@ async function signUp() {
 <template>
   <div>
     <h1>Sign Up</h1>
+    <h2>Password should contain at least 8 characters - including at least one uppercase letter, one lowercase letter, one number, and one special character</h2>
     <form
       method="post"
       @submit.prevent="signUp"
