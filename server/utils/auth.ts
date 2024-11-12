@@ -68,7 +68,7 @@ async function verifyPassword(event: H3Event, email: string, password: string, h
     if (await argon2.verify(hash, password)) {
       return true
     } else {
-      await auditLogger(event, email, 'verifyPassword', 'Password does not match', 'error')
+      await auditLogger(event, email, 'verifyPassword', 'Password match hash failed', 'error')
       return false
     }
   } catch (error) {
@@ -754,7 +754,6 @@ export async function verifyOTP(event: H3Event) {
       statusMessage: 'User ID or email not found'
     })
   }
-
   try {
     // Check if valid OTP exists
     const result = await authDB.query(
@@ -875,8 +874,8 @@ export async function auditLogger(event: H3Event | null, email: string, action: 
   let userAgent: string
   if (event) {
     const req = event?.node.req
-    ip = getClientInfo(req).ip || getClientInfo(req).originalIp || 'unknown'
-    userAgent = getClientInfo(req).userAgent || 'unknown'
+    ip = getClientInfo(req).ip
+    userAgent = getClientInfo(req).userAgent
   } else {
     ip = 'unknown'
     userAgent = 'unknown'
@@ -919,63 +918,9 @@ function safeURL(event: H3Event, url: URL | string): URL | null {
   }
 }
 
-const getClientInfo = (req: NodeIncomingMessage) => {
-  const ip = (() => {
-    const forwardedFor = req.headers['x-forwarded-for']
-    if (forwardedFor) {
-      // Get the first IP in the chain (original client)
-      const ips = forwardedFor.split(',').map(ip => ip.trim())
-      return ips[0]
-    }
-    const realIp = req.headers['x-real-ip']
-    if (realIp) {
-      return realIp
-    }
-
-    // Fall back to connection remote address
-    return req.connection.remoteAddress
-      || req.socket.remoteAddress
-      || (req.connection.socket ? req.connection.socket.remoteAddress : null)
-  })()
-
+export const getClientInfo = (req: NodeIncomingMessage) => {
+  const ipHeader = req.headers['x-forwarded-for'] || req.headers['x-real-ip']
+  const ip = Array.isArray(ipHeader) ? ipHeader[0] : ipHeader || req.socket.remoteAddress || 'Unknown'
   const userAgent = req.headers['user-agent'] || 'Unknown'
-
-  // Clean and validate IP
-  const cleanIp = (() => {
-    if (!ip) return null
-
-    // Remove IPv6 prefix if present
-    const cleaned = ip.replace(/^::ffff:/, '')
-
-    // Basic IPv4 validation
-    const ipv4Regex = /^(\d{1,3}\.){3}\d{1,3}$/
-    if (ipv4Regex.test(cleaned)) {
-      const parts = cleaned.split('.')
-      const valid = parts.every((part) => {
-        const num = parseInt(part, 10)
-        return num >= 0 && num <= 255
-      })
-      return valid ? cleaned : null
-    }
-
-    // Basic IPv6 validation
-    const ipv6Regex = /^([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}$/
-    if (ipv6Regex.test(cleaned)) {
-      return cleaned
-    }
-
-    return null
-  })()
-
-  return {
-    ip: cleanIp,
-    userAgent,
-    originalIp: ip,
-    isProxy: ip !== cleanIp,
-    headers: {
-      forwarded: req.headers['forwarded'] || null,
-      forwardedFor: req.headers['x-forwarded-for'] || null,
-      realIp: req.headers['x-real-ip'] || null
-    }
-  }
+  return { ip, userAgent }
 }
