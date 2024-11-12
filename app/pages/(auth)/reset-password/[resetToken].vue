@@ -8,21 +8,13 @@ definePageMeta({
 const password = ref('')
 const confirmPassword = ref('')
 const status = ref('')
-async function resetPassword() {
+
+const { resetPassword } = useAuth()
+async function handleSubmit() {
+  const route = useRoute()
   try {
-    const response = await $fetch('/api/auth/reset-password/reset', {
-      method: 'POST',
-      body: {
-        password: password.value,
-        confirmPassword: confirmPassword.value,
-        resetToken: useRoute().params.resetToken
-      }
-    })
-    if (response.success === true) {
-      status.value = response.message
-    } else {
-      status.value = response.message
-    }
+    const result = await resetPassword(password.value, confirmPassword.value, route.params.resetToken as string)
+    status.value = result
   } catch (error) {
     status.value = (error as Error).message
   }
@@ -34,7 +26,7 @@ async function resetPassword() {
     <h1>Forgot Password</h1>
     <form
       method="post"
-      @submit.prevent="resetPassword()"
+      @submit.prevent="handleSubmit"
     >
       <label for="new-password">New Password</label>
       <input

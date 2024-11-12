@@ -1,13 +1,22 @@
-import type { UserWithSession } from '#shared/types'
+interface User {
+  id: string
+  email: string
+  fname: string
+  lname: string
+  email_verified: boolean
+  mfa: boolean
+  role: string
+  mfa_verified: boolean
+}
 
 export const useAuth = () => {
-  const user = useState<UserWithSession | null>('user', () => null)
+  const user = useState<User | null>('user', () => null)
 
   async function updateUser() {
     try {
       const data = await useRequestFetch()('/api/auth/session')
-      if (data) {
-        user.value = data
+      if (data && user.value) {
+        user.value = data as User
       }
     } catch (error) {
       console.error(error)
@@ -69,7 +78,7 @@ export const useAuth = () => {
           otp
         })
       })
-      if (result.success) {
+      if (result && result.success) {
         await updateUser()
         if (route.query.redirect) {
           status.value = 'MFA verification successful'
@@ -94,7 +103,7 @@ export const useAuth = () => {
           otp
         })
       })
-      if (result.success) {
+      if (result && result.success) {
         await updateUser()
 
         return true
@@ -114,7 +123,7 @@ export const useAuth = () => {
           otp
         })
       })
-      if (result.success) {
+      if (result && result.success) {
         await updateUser()
         return true
       } else {
@@ -156,15 +165,35 @@ export const useAuth = () => {
       return (error as Error).message
     }
   }
+  async function resetPassword(password: string, confirmPassword: string, resetToken: string) {
+    try {
+      const response = await $fetch('/api/auth/reset-password/reset', {
+        method: 'POST',
+        body: {
+          password,
+          confirmPassword,
+          resetToken
+        }
+      })
+      if (response.success === true) {
+        return response.message
+      } else {
+        return response.message
+      }
+    } catch (error) {
+      return (error as Error).message
+    }
+  }
   return {
     user,
-    signOut,
-    verifyResetPasswordToken,
     signIn,
+    signOut,
     sendOtp,
     verifyOtp,
     activateMFA,
     deactivateMFA,
-    requestPasswordReset
+    verifyResetPasswordToken,
+    requestPasswordReset,
+    resetPassword
   }
 }

@@ -1,4 +1,4 @@
-import type { User, Session } from '#shared/types'
+import type { User, Session } from '~~/server/utils/types'
 import { handleRateLimit, roleBasedAuth, emailVerification, handleSession, handleCsrf } from '~~/server/utils/auth'
 
 export default defineEventHandler(async (event) => {

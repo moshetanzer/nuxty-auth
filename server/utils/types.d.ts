@@ -16,7 +16,3 @@ export interface Session {
   expires_at: Date
   mfa_verified: boolean
 }
-
-export interface UserWithSession extends User {
-  mfa_verified: boolean
-}

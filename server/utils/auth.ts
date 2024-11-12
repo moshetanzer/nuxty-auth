@@ -2,7 +2,7 @@ import crypto from 'crypto'
 import pg from 'pg'
 import argon2 from 'argon2'
 import type { H3Event, NodeIncomingMessage } from 'h3'
-import type { User, Session } from '#shared/types'
+import type { User, Session } from '~~/server/utils/types'
 
 const { Pool } = pg
 const config = useRuntimeConfig()
