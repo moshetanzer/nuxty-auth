@@ -634,7 +634,6 @@ export async function resetPassword(event: H3Event) {
     })
   }
 }
-
 export async function roleBasedAuth(event: H3Event) {
   const rules = getRouteRules(event).nuxtyAuth?.roles as string[]
   const to = event.node.req.url

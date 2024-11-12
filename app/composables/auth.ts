@@ -143,6 +143,19 @@ export const useAuth = () => {
     }
   }
 
+  async function requestPasswordReset(email: string) {
+    try {
+      const response = await $fetch('/api/auth/reset-password', {
+        method: 'POST',
+        body: {
+          email: email
+        }
+      })
+      return response.message
+    } catch (error) {
+      return (error as Error).message
+    }
+  }
   return {
     user,
     signOut,
@@ -151,6 +164,7 @@ export const useAuth = () => {
     sendOtp,
     verifyOtp,
     activateMFA,
-    deactivateMFA
+    deactivateMFA,
+    requestPasswordReset
   }
 }

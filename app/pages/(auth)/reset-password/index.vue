@@ -4,17 +4,15 @@ useHead({
 })
 const email = ref('')
 const status = ref('')
-async function forgotPassword() {
+const { requestPasswordReset } = useAuth()
+
+async function handleSubmit() {
   try {
-    const response = await $fetch('/api/auth/reset-password', {
-      method: 'POST',
-      body: {
-        email: email.value
-      }
-    })
-    status.value = response.message
+    await requestPasswordReset(email.value)
+    status.value = 'Password reset email sent'
   } catch (error) {
-    status.value = (error as Error).message
+    status.value = error as string || (error as Error).message
+    console.error('Request password reset error:', error)
   }
 }
 </script>
@@ -24,7 +22,7 @@ async function forgotPassword() {
     <h1>Forgot Password</h1>
     <form
       method="post"
-      @submit.prevent="forgotPassword"
+      @submit.prevent="handleSubmit"
     >
       <label for="email">Email</label>
       <input
