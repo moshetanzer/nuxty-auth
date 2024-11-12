@@ -185,23 +185,37 @@ export async function authenticateUser(event: H3Event): Promise<User> {
    *
    * @returns The id of the created user, or null if there was an error.
    */
-export async function createUser(event: H3Event): Promise<string | null> {
+export async function createUser(event: H3Event): Promise<void> {
   const { fname, lname, email, password } = await readBody(event)
-  const role = useRuntimeConfig(event).defaultUserRole || 'user'
   try {
+    const existingUser = await authDB.query<User>(`SELECT * FROM ${AUTH_TABLE_NAME} WHERE email = $1`, [email])
+    if (existingUser.rows.length > 0) {
+      await auditLogger(event, email, 'createUser', 'User already exists', 'error')
+      throw createError({
+        statusCode: 400,
+        statusMessage: 'User already exists'
+      })
+    }
+    const role = useRuntimeConfig(event).defaultUserRole || 'user'
     const userId = crypto.randomUUID()
     const hashedPassword = await hashPassword(event, password)
 
     const result = await authDB.query(`
       INSERT INTO ${AUTH_TABLE_NAME} (id, fname, lname, email, password, role, failed_attempts)
-      VALUES ($1, $2, $3, $4, $5, $6, 0)
-      RETURNING id
+      VALUES ($1, $2, $3, $4, $5, $6, 0) RETURNING id
     `, [userId, fname, lname, email, hashedPassword, role])
+
+    if (result.rows.length === 0) {
+      await auditLogger(event, email, 'createUser', 'User not created', 'error')
+      throw createError({
+        statusCode: 500,
+        statusMessage: 'Failed to create user'
+      })
+    }
     await auditLogger(event, email, 'createUser', 'User created', 'success')
-    return result.rows[0].id
   } catch (error) {
     await auditLogger(event, email, 'createUser', String((error as Error).message), 'error')
-    return null
+    throw error
   }
 }
 
