@@ -18,6 +18,7 @@ const { user, signOut } = useAuth()
       Home
     </NuxtLink>
     <ManageMfa />
+    <ResetPassword />
     <button @click="signOut()">
       Sign Out
     </button>

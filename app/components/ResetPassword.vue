@@ -3,6 +3,7 @@
     <button @click="handleSubmit">
       Request Password Reset
     </button>
+    {{ status }}
   </div>
 </template>
 

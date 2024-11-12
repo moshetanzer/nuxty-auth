@@ -402,6 +402,26 @@ export async function deleteSession(event: H3Event): Promise<void> {
     await auditLogger(event, 'unknown', 'deleteSession', String((error as Error).message), 'error')
   }
 }
+export async function getUserIdFromEmail(event: H3Event, email: string): Promise<string | null> {
+  try {
+    const result = await authDB.query<User>(`SELECT id FROM ${AUTH_TABLE_NAME} WHERE email = $1`, [email])
+    if (result.rows.length === 0) {
+      await auditLogger(event, email, 'getUserIdFromEmail', 'User not found', 'error')
+      return null
+    }
+    return result.rows[0].id
+  } catch (error) {
+    await auditLogger(event, email, 'getUserIdFromEmail', String((error as Error).message), 'error')
+    return null
+  }
+}
+export async function deleteAllSessions(event: H3Event, userId: string): Promise<void> {
+  try {
+    await authDB.query(`DELETE FROM ${SESSION_TABLE_NAME} WHERE user_id = $1`, [userId])
+  } catch (error) {
+    await auditLogger(event, 'unknown', 'deleteAllSessions', String((error as Error).message), 'error')
+  }
+}
 export async function cleanupExpiredSessions(event: H3Event): Promise<void> {
   try {
     await authDB.query(`
@@ -624,7 +644,7 @@ export async function resetPassword(event: H3Event) {
     ).catch(() => {
       console.error('Failed to log password reset success')
     })
-
+    await deleteAllSessions(event, user.id)
     return true
   } catch (error) {
     await auditLogger(event, 'unknown', 'resetPassword', String((error as Error).message), 'error')
