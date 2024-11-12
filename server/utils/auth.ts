@@ -15,7 +15,6 @@ const authDB = new Pool({
 const AUTH_TABLE_NAME = escapeTableName(config.authUserTableName)
 const SESSION_TABLE_NAME = escapeTableName(config.authSessionTableName)
 const MFA_TABLE_NAME = escapeTableName(config.authMfaTableName)
-// const EMAIL_VERIFICATION_TABLE_NAME = escapeTableName(config.authEmailVerificationTableName)
 const EMAIL_OTP_EXPIRY = 15 // mins
 
 const MAX_FAILED_ATTEMPTS = config.maxFailedAttempts || 10 as number
@@ -23,9 +22,9 @@ const MAX_FAILED_ATTEMPTS = config.maxFailedAttempts || 10 as number
 const RATE_LIMIT = 100
 const RATE_LIMIT_WINDOW = 60 // seconds
 
-const SESSION_TOTAL_DURATION = 43200 // mins (30 days)
-const SESSION_REFRESH_INTERVAL = 720 // mins (12 hours)
-const SESSION_EXTENSION_DURATION = 10080 // mins (7 days)
+const SESSION_TOTAL_DURATION = config.sessionTotalDuration || 43200 as number // mins (30 days)
+const SESSION_REFRESH_INTERVAL = config.sessionRefreshInterval || 720 as number // mins (12 hours)
+const SESSION_EXTENSION_DURATION = config.sessionExtensionDuration || 10080 as number // mins (7 days)
 
 const ARGON2_CONFIG = {
   type: argon2.argon2id,
@@ -244,7 +243,7 @@ export async function createSession(event: H3Event, userId: string): Promise<voi
     await auditLogger(event, email, 'createSession', 'Session created', 'success')
     setCookie(event, 'mediCloudID', sessionId, {
       path: '/',
-      maxAge: SESSION_TOTAL_DURATION * 60,
+      maxAge: Number(SESSION_TOTAL_DURATION) * 60,
       httpOnly: true,
       sameSite: 'lax',
       secure: true
@@ -428,7 +427,7 @@ export async function cleanupExpiredSessions(event: H3Event): Promise<void> {
           DELETE FROM ${SESSION_TABLE_NAME}
           WHERE expires_at <= NOW()
           OR created_at + (INTERVAL '1 minute' * $1) <= NOW()`,
-    [SESSION_TOTAL_DURATION + SESSION_EXTENSION_DURATION]
+    [Number(SESSION_TOTAL_DURATION) + Number(SESSION_EXTENSION_DURATION)]
     )
   } catch (error) {
     await auditLogger(event, 'system', 'cleanupExpiredSessions', String((error as Error).message), 'error')
