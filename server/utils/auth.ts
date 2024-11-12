@@ -15,12 +15,10 @@ const authDB = new Pool({
 const AUTH_TABLE_NAME = escapeTableName(config.authUserTableName)
 const SESSION_TABLE_NAME = escapeTableName(config.authSessionTableName)
 const MFA_TABLE_NAME = escapeTableName(config.authMfaTableName)
-const EMAIL_OTP_EXPIRY = 15 // mins
 
-const MAX_FAILED_ATTEMPTS = config.maxFailedAttempts || 10 as number
+const EMAIL_OTP_EXPIRY = config.otpExpiry || 15 as number // minutes
 
-const RATE_LIMIT = 100
-const RATE_LIMIT_WINDOW = 60 // seconds
+const MAX_FAILED_ATTEMPTS = config.maxFailedAttempts || 10 as number // attempts
 
 const SESSION_TOTAL_DURATION = config.sessionTotalDuration || 43200 as number // mins (30 days)
 const SESSION_REFRESH_INTERVAL = config.sessionRefreshInterval || 720 as number // mins (12 hours)
@@ -358,38 +356,56 @@ export async function refreshSession(event: H3Event, sessionId: string): Promise
   }
 }
 export async function handleRateLimit(event: H3Event): Promise<void> {
-  const ip = getClientIP(event)
-  const key = `rate-limit:${ip}`
+  const to = event.node.req.url
+  const defaultUrlPattern = '/api'
 
-  const [current, ttl] = await storage.getItem<[number, number]>(key) || [0, 0]
+  // Ensure the route is an API route, and apply custom rules if necessary
+  if (to && to.startsWith(defaultUrlPattern)) {
+    const rules = getRouteRules(event).nuxtyAuth?.rateLimit as boolean | { requests: number, window: number }
+    if (typeof rules === 'boolean' && !rules) {
+      return
+    }
+    const ip = getClientInfo(event.node.req).ip
+    const key = `rate-limit:${ip}:${to}`
 
-  if (current >= RATE_LIMIT) {
-    setRateLimitHeaders(event, current, ttl)
-    await auditLogger(event, event.context.user?.email || 'unknown', 'handleRateLimit', 'Too many requests', 'error')
-    throw createError({
-      statusCode: 429,
-      statusMessage: 'Too Many Requests'
-    })
-  }
+    let RATE_LIMIT = config.rateLimit || 100 // requests
+    let RATE_LIMIT_WINDOW = config.rateLimitWindow || 60 // seconds
 
-  const newCount = current + 1
-  if (newCount === 1) {
-    await storage.setItem(key, [newCount, RATE_LIMIT_WINDOW], { ttl: RATE_LIMIT_WINDOW })
-  } else {
-    await storage.setItem(key, [newCount, ttl])
-  }
+    if (rules && typeof rules === 'object') {
+      if (rules.requests && rules.window) {
+        RATE_LIMIT = rules.requests
+        RATE_LIMIT_WINDOW = rules.window
+      } else {
+        await auditLogger(event, 'unknown', 'handleRateLimit', 'Rate limit rules not set correctly', 'error')
+        console.error('Rate limit rules not set correctly')
+        return
+      }
+    }
 
-  setRateLimitHeaders(event, newCount, ttl)
+    const [current, ttl] = await storage.getItem<[number, number]>(key) || [0, 0]
+    if (current >= Number(RATE_LIMIT)) {
+      setRateLimitHeaders(event, current, ttl)
+      await auditLogger(event, event.context.user?.email || 'unknown', 'handleRateLimit', 'Too many requests', 'error')
+      throw createError({
+        statusCode: 429,
+        statusMessage: 'Too Many Requests'
+      })
+    }
 
-  function getClientIP(event: H3Event): string {
-    return event.node.req.headers['x-forwarded-for'] as string
-      || event.node.req.socket.remoteAddress as string
-  }
+    const newCount = current + 1
+    if (newCount === 1) {
+      await storage.setItem(key, [newCount, RATE_LIMIT_WINDOW], { ttl: RATE_LIMIT_WINDOW })
+    } else {
+      await storage.setItem(key, [newCount, ttl])
+    }
 
-  function setRateLimitHeaders(event: H3Event, current: number, ttl: number): void {
-    event.node.res.setHeader('X-RateLimit-Limit', RATE_LIMIT)
-    event.node.res.setHeader('X-RateLimit-Remaining', Math.max(0, RATE_LIMIT - current))
-    event.node.res.setHeader('X-RateLimit-Reset', Math.ceil(Date.now() / 1000 + ttl))
+    setRateLimitHeaders(event, newCount, ttl)
+
+    function setRateLimitHeaders(event: H3Event, current: number, ttl: number): void {
+      event.node.res.setHeader('X-RateLimit-Limit', RATE_LIMIT)
+      event.node.res.setHeader('X-RateLimit-Remaining', Math.max(0, Number(RATE_LIMIT) - current))
+      event.node.res.setHeader('X-RateLimit-Reset', Math.ceil(Date.now() / 1000 + ttl))
+    }
   }
 }
 export async function deleteSession(event: H3Event): Promise<void> {

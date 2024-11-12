@@ -1,5 +1,6 @@
 <script setup lang="ts">
 const { sendOtp, user, deactivateMFA, activateMFA } = useAuth()
+const status = ref('')
 const mfaActive = user.value?.mfa
 const otp = ref('')
 
@@ -44,6 +45,7 @@ const deactivateStart = ref(false)
           Activate Mfa
         </button>
       </form>
+      {{ status }}
     </div>
     <div v-else>
       <h1>MFA is active</h1>

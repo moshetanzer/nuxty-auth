@@ -6,8 +6,8 @@ interface NuxtAuthConfig {
   auth?: boolean
   multiFactor?: boolean
   rateLimit?: {
-    max: number
-    duration: number
+    requests: number
+    window: number
   } | boolean
 }
 

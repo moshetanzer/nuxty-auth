@@ -11,6 +11,9 @@ export default defineNuxtConfig({
     sessionRefreshInterval: '',
     sessionTotalDuration: '',
     sessionExtensionDuration: '',
+    rateLimit: '',
+    rateLimitWindow: '',
+    otpExpiry: '',
     maxFailedAttempts: '',
     emailHost: '',
     emailPort: '',
@@ -23,13 +26,18 @@ export default defineNuxtConfig({
       nuxtyAuth: {
         roles: ['admin'],
         emailVerification: true,
-        auth: true
+        auth: true,
+        rateLimit: {
+          requests: 10,
+          window: 60
+        }
       }
     },
     '/api/user/**': {
       nuxtyAuth: {
         auth: true,
-        roles: ['user', 'admin']
+        roles: ['user', 'admin'],
+        rateLimit: false
       }
     }
   },
